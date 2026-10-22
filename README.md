@@ -14,7 +14,9 @@ The host's browser runs the game, and friends connect straight to it over WebRTC
 
 ## Controls
 
-WASD move · Shift sprint · C crouch/slide · Space jump · Left mouse shoot · Right mouse aim · R reload · 1/2/wheel switch · V melee · F buy/revive · Esc pause/invite
+WASD move · Shift sprint · C crouch/slide · Space jump · Left mouse shoot · Right mouse aim · R reload · 1/2/wheel switch · V melee · G grenade (hold to cook) · F buy/revive · Esc pause/invite
+
+Power-ups drop from zombies: Max Ammo, Insta-Kill, Double Points and Nuke. Walk over them before they blink out.
 
 ## Development
 

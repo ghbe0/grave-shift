@@ -1,9 +1,9 @@
 // Authoritative game state, run only on the host. Players report position/hits/purchases; the sim decides
 // points, health, zombies and rounds. Outgoing messages queue in `out` as [playerId | '*', msg].
 import {
-  parseMap, CELL, DOORS, INTERACT, PERKS, WEAPONS, POINTS, CRATE_COST, ZOMBIE_SPEEDS,
+  parseMap, CELL, DOORS, INTERACT, PERKS, WEAPONS, POINTS, CRATE_COST, ZOMBIE_SPEEDS, POWERUPS, DROPS, NADE,
   interactPos, useRange, flowField, stepToward, lineOfSight, collide, toCell, cellCenter,
-  zombieHealth, zombieCount, zombieSpeed, rollCrate,
+  zombieHealth, zombieCount, zombieSpeed, rollCrate, stepGrenade,
 } from './rules.js';
 
 const MAX_ALIVE = 24, MAX_PLAYERS = 4, BREAK = 10, BLEED = 45, SELF_REVIVE = 8, REGEN_DELAY = 3, HIT = 50;
@@ -23,13 +23,14 @@ export class Sim {
 
   reset() {
     Object.assign(this, { open: new Set(), zombies: new Map(), nextZ: 1, round: 0, phase: 'break', timer: 3, toSpawn: 0, spawnCd: 0, fieldCd: 0, fields: new Map() });
+    Object.assign(this, { nades: [], powerups: [], nextId: 1, ik: 0, dp: 0, bag: [], drops: 0, score: 0, nextDrop: DROPS.firstAt, dropStep: DROPS.firstAt });
     this.emit('*', { t: 'reset' });
     for (const p of this.players.values()) this.respawn(p, true);
   }
 
   respawn(p, fresh) {
     const i = [...this.players.keys()].indexOf(p.id);
-    Object.assign(p, { x: this.map.start.x + (i % 2) * 1.2, y: 0, z: this.map.start.z + (i >> 1) * 1.2, hp: 100, maxHp: 100, perks: [], down: false, dead: false, bleed: 0, rev: 0, selfRev: 0, lastHurt: -99 });
+    Object.assign(p, { x: this.map.start.x + (i % 2) * 1.2, y: 0, z: this.map.start.z + (i >> 1) * 1.2, hp: 100, maxHp: 100, perks: [], down: false, dead: false, bleed: 0, rev: 0, selfRev: 0, lastHurt: -99, nades: NADE.start });
     if (fresh) Object.assign(p, { points: POINTS.start, kills: 0, heads: 0, downs: 0 });
     this.emit(p.id, { t: 'respawn', x: p.x, z: p.z });
   }
@@ -53,19 +54,94 @@ export class Sim {
       Object.assign(p, { yaw: m.yaw, pitch: m.pitch, use: !!m.use, w: WEAPONS[m.w] ? m.w : 'pistol' });
     } else if (m.t === 'hit') this.hit(p, m);
     else if (m.t === 'buy') this.buy(p, m);
+    else if (m.t === 'nade') this.throwNade(p, m);
     else if (m.t === 'restart' && id === this.hostId && this.phase === 'over') this.reset();
+  }
+
+  give(p, n) {
+    const v = n * (this.dp > 0 ? 2 : 1);
+    p.points += v;
+    this.score += v;
   }
 
   hit(p, m) {
     const z = this.zombies.get(m.z);
     if (!z || p.down || p.dead) return;
-    z.hp -= Math.min(Math.max(+m.dmg || 0, 0), 5000); // shortcut: trusts the client's hit test; fine among friends
-    if (z.hp > 0) { p.points += POINTS.hit; return; }
-    p.points += m.melee ? POINTS.melee : m.head ? POINTS.head : POINTS.kill;
-    p.kills++;
-    if (m.head) p.heads++;
+    this.damage(p, z, Math.min(Math.max(+m.dmg || 0, 0), 5000), !!m.head, !!m.melee); // shortcut: trusts the client's hit test; fine among friends
+  }
+
+  damage(p, z, dmg, head, melee) {
+    z.hp -= this.ik > 0 ? Infinity : dmg;
+    if (z.hp > 0) { if (p) this.give(p, POINTS.hit); return; }
+    if (p) {
+      this.give(p, melee ? POINTS.melee : head ? POINTS.head : POINTS.kill);
+      p.kills++;
+      if (head) p.heads++;
+    }
     this.zombies.delete(z.id);
-    this.emit('*', { t: 'zdie', id: z.id, head: !!m.head });
+    this.emit('*', { t: 'zdie', id: z.id, head });
+    this.maybeDrop(z.x, z.z);
+  }
+
+  maybeDrop(x, z) {
+    if (this.drops >= DROPS.perRound) return;
+    const byScore = this.score >= this.nextDrop;
+    if (!byScore && this.rnd() >= DROPS.chance) return;
+    if (byScore) { this.dropStep *= DROPS.growth; this.nextDrop = this.score + this.dropStep; }
+    if (!this.bag.length) { // shuffled bag: every power-up shows up once per cycle
+      this.bag = Object.keys(POWERUPS);
+      for (let i = this.bag.length - 1; i > 0; i--) { const j = Math.floor(this.rnd() * (i + 1)); [this.bag[i], this.bag[j]] = [this.bag[j], this.bag[i]]; }
+    }
+    this.drops++;
+    this.powerups.push({ id: this.nextId++, type: this.bag.pop(), x, z, life: DROPS.life });
+    this.emit('*', { t: 'drop', x, z });
+  }
+
+  pickup(pu, p) {
+    if (pu.type === 'maxammo') for (const q of this.players.values()) q.nades = NADE.max;
+    else if (pu.type === 'instakill') this.ik = DROPS.effect;
+    else if (pu.type === 'double') this.dp = DROPS.effect;
+    else {
+      for (const z of this.zombies.values()) this.emit('*', { t: 'zdie', id: z.id, head: false });
+      this.zombies.clear();
+      for (const q of this.players.values()) if (!q.dead) this.give(q, POINTS.nuke);
+    }
+    this.emit('*', { t: 'pu', type: pu.type, name: p.name });
+  }
+
+  throwNade(p, m) {
+    if (p.down || p.dead || p.nades <= 0) return;
+    if (![m.x, m.y, m.z, m.vx, m.vy, m.vz, m.fuse].every(Number.isFinite)) return;
+    if (Math.hypot(m.vx, m.vy, m.vz) > 25 || Math.hypot(m.x - p.x, m.z - p.z) > 2) return;
+    p.nades--;
+    this.nades.push({ id: this.nextId++, owner: p.id, x: m.x, y: m.y, z: m.z, vx: m.vx, vy: m.vy, vz: m.vz, fuse: Math.min(Math.max(m.fuse, 0), NADE.fuse) });
+  }
+
+  explode(g) {
+    const R = NADE.radius, owner = this.players.get(g.owner);
+    for (const z of [...this.zombies.values()]) {
+      const d = Math.hypot(z.x - g.x, z.z - g.z);
+      if (d < R && lineOfSight(this.map, this.open, g.x, g.z, z.x, z.z)) this.damage(owner, z, 75 + 225 * (1 - d / R), false, false);
+    }
+    // Your own frag can hurt you; teammates are safe (no friendly fire).
+    const d = owner ? Math.hypot(owner.x - g.x, owner.z - g.z) : Infinity;
+    if (d < R && !owner.down && !owner.dead && lineOfSight(this.map, this.open, g.x, g.z, owner.x, owner.z)) this.hurt(owner, Math.round(75 * (1 - d / R)));
+    this.emit('*', { t: 'boom', id: g.id, x: g.x, y: g.y, z: g.z });
+  }
+
+  effectsTick(dt) {
+    this.ik = Math.max(0, this.ik - dt);
+    this.dp = Math.max(0, this.dp - dt);
+    for (const g of this.nades) {
+      stepGrenade(this.map, this.open, g, dt);
+      if ((g.fuse -= dt) <= 0) this.explode(g);
+    }
+    this.nades = this.nades.filter(g => g.fuse > 0);
+    this.powerups = this.powerups.filter(pu => {
+      const p = [...this.players.values()].find(q => !q.down && !q.dead && Math.hypot(q.x - pu.x, q.z - pu.z) < 1.6);
+      if (p) this.pickup(pu, p);
+      return !p && (pu.life -= dt) > 0;
+    });
   }
 
   buy(p, m) {
@@ -106,6 +182,7 @@ export class Sim {
     if (this.phase === 'break') { if ((this.timer -= dt) <= 0) this.startRound(); }
     else this.spawnTick(dt);
     this.zombieTick(dt);
+    this.effectsTick(dt);
     this.playerTick(dt);
     if ([...this.players.values()].every(p => p.dead || (p.down && !(p.selfRev > 0)))) {
       this.phase = 'over';
@@ -115,8 +192,11 @@ export class Sim {
 
   startRound() {
     this.round++;
-    Object.assign(this, { phase: 'round', toSpawn: zombieCount(this.round, this.players.size), spawnCd: 1, zhp: zombieHealth(this.round) });
-    for (const p of this.players.values()) if (p.dead) this.respawn(p, false);
+    Object.assign(this, { phase: 'round', toSpawn: zombieCount(this.round, this.players.size), spawnCd: 1, zhp: zombieHealth(this.round), drops: 0 });
+    for (const p of this.players.values()) {
+      if (p.dead) this.respawn(p, false);
+      else if (this.round > 1) p.nades = Math.min(NADE.max, p.nades + NADE.perRound);
+    }
     this.emit('*', { t: 'round', round: this.round });
   }
 
@@ -187,8 +267,8 @@ export class Sim {
     for (const z of zs) [z.x, z.z] = collide(this.map, this.open, z.x, z.z, 0.35);
   }
 
-  hurt(p) {
-    p.hp -= HIT;
+  hurt(p, dmg = HIT) {
+    p.hp -= dmg;
     p.lastHurt = this.time;
     this.emit(p.id, { t: 'hurt' });
     if (p.hp > 0) return;
@@ -224,12 +304,14 @@ export class Sim {
   snapshot() {
     const r2 = v => Math.round(v * 100) / 100;
     return {
-      t: 'snap', r: this.round, ph: this.phase, d: [...this.open].join(''),
+      t: 'snap', r: this.round, ph: this.phase, d: [...this.open].join(''), ik: Math.ceil(this.ik), dp: Math.ceil(this.dp),
       z: [...this.zombies.values()].map(z => [z.id, r2(z.x), r2(z.z), r2(z.yaw), z.kind, z.atk > 0.7 ? 1 : 0]),
+      g: this.nades.map(g => [g.id, r2(g.x), r2(g.y), r2(g.z)]),
+      pu: this.powerups.map(pu => [pu.id, pu.type, r2(pu.x), r2(pu.z), Math.ceil(pu.life)]),
       p: [...this.players.values()].map(p => ({
         id: p.id, n: p.name, x: r2(p.x), y: r2(p.y), z: r2(p.z), yaw: r2(p.yaw), pitch: r2(p.pitch),
         hp: Math.ceil(p.hp), mhp: p.maxHp, pk: p.perks, pts: p.points, dn: p.down, dd: p.dead,
-        rev: r2(p.rev), bl: Math.ceil(p.bleed), sr: p.selfRev > 0, w: p.w, k: p.kills, hs: p.heads, ds: p.downs,
+        rev: r2(p.rev), bl: Math.ceil(p.bleed), sr: p.selfRev > 0, w: p.w, k: p.kills, hs: p.heads, ds: p.downs, gn: p.nades,
       })),
     };
   }

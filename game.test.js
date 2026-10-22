@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseMap, flowField, collide, zombieHealth, zombieCount, rollCrate, INTERACT, interactPos, toCell, CELL } from './rules.js';
+import { parseMap, flowField, collide, zombieHealth, zombieCount, rollCrate, stepGrenade, INTERACT, interactPos, toCell, CELL } from './rules.js';
 import { Sim } from './sim.js';
 
 const map = parseMap();
@@ -86,6 +86,77 @@ test('sim: solo round flow, points, doors, game over', () => {
   for (let i = 0; i < 2; i++) sim.hurt(p);
   sim.tick(0.01);
   assert.equal(sim.phase, 'over');
+});
+
+// A solo sim mid-round with zombies placed by hand.
+function arena(rnd = () => 0.5) {
+  const sim = new Sim('host', rnd);
+  sim.addPlayer('host', 'T');
+  const p = sim.players.get('host');
+  Object.assign(sim, { phase: 'round', round: 1, toSpawn: 99 });
+  const add = (x, z, hp = 150) => { const id = sim.nextZ++; sim.zombies.set(id, { id, x, z, yaw: 0, hp, kind: 0, atk: 0, rise: 99 }); return id; };
+  sim.out.length = 0;
+  return { sim, p, add };
+}
+
+test('grenades fly, bounce off walls, and blast zombies in the open but not behind walls', () => {
+  const g = { x: 1.5 * CELL, y: 1, z: 2.5 * CELL, vx: -20, vy: 0, vz: 0 };
+  for (let i = 0; i < 60; i++) stepGrenade(map, new Set(), g, 0.05);
+  assert.ok(g.x > CELL, 'stayed inside the room');
+  assert.equal(g.y, 0.08, 'came to rest on the floor');
+
+  const { sim, p, add } = arena();
+  Object.assign(p, { x: 4.5 * CELL, z: 5.5 * CELL });
+  const near = add(4.5 * CELL + 1, 2.5 * CELL), far = add(4.5 * CELL, 2.5 * CELL + 4), walled = add(9.5 * CELL, 2.5 * CELL); // walled: other side of the barracks wall
+  sim.handle('host', { t: 'nade', x: p.x, y: 1.5, z: p.z, vx: 0, vy: 0, vz: 0, fuse: 3 });
+  assert.equal(p.nades, 1);
+  sim.nades[0].x = 4.5 * CELL; sim.nades[0].z = 2.5 * CELL; // shortcut: drop it right between the zombies
+  for (let i = 0; i < 70; i++) sim.tick(0.05);
+  assert.ok(sim.out.some(([, m]) => m.t === 'boom'));
+  assert.equal(sim.zombies.has(near), false);
+  assert.equal(sim.zombies.get(far).hp, 150 - (75 + 225 * (1 - 4 / 5.5)));
+  assert.equal(sim.zombies.get(walled).hp, 150);
+  assert.equal(p.hp, 100, 'thrower was out of range');
+  for (let i = 0; i < 5; i++) sim.handle('host', { t: 'nade', x: p.x, y: 1.5, z: p.z, vx: 0, vy: 0, vz: 0, fuse: 3 });
+  assert.equal(sim.nades.length, 1, 'only the one grenade left could be thrown');
+
+  const self = arena();
+  self.sim.handle('host', { t: 'nade', x: self.p.x, y: 1.5, z: self.p.z, vx: 0, vy: 0, vz: 0, fuse: 0 });
+  self.sim.tick(0.05);
+  assert.equal(self.p.hp, 25, 'cooked in hand: 75 damage to yourself');
+});
+
+test('power-ups: drop by score, max 4 per round, and each effect works', () => {
+  const { sim, p, add } = arena(() => 0.99); // never hit the 2% random roll
+  for (let i = 0; i < 6; i++) { sim.score = sim.nextDrop; sim.handle('host', { t: 'hit', z: add(p.x + 10, p.z), dmg: 999 }); }
+  assert.equal(sim.powerups.length, 4, 'capped at 4 drops per round');
+  assert.deepEqual(new Set(sim.powerups.map(pu => pu.type)), new Set(['maxammo', 'instakill', 'double', 'nuke']));
+
+  const grab = type => { const pu = sim.powerups.find(u => u.type === type); Object.assign(pu, { x: p.x, z: p.z }); sim.tick(0.01); };
+  p.nades = 0;
+  grab('maxammo');
+  assert.equal(p.nades, 4);
+  grab('double');
+  p.points = 0;
+  sim.handle('host', { t: 'hit', z: add(p.x + 10, p.z, 9999), dmg: 1 });
+  assert.equal(p.points, 20, 'double points: 20 per hit');
+  grab('instakill');
+  const tough = add(p.x + 10, p.z, 99999);
+  sim.handle('host', { t: 'hit', z: tough, dmg: 1, head: true });
+  assert.equal(sim.zombies.has(tough), false, 'insta-kill: one hit kills');
+  assert.equal(p.points, 20 + 200, 'headshot kill, doubled');
+  add(p.x + 10, p.z); add(p.x + 12, p.z);
+  p.points = 0;
+  grab('nuke');
+  assert.equal(sim.zombies.size, 0);
+  assert.equal(p.points, 800, '400 nuke points, doubled');
+  for (let i = 0; i < 31 * 20; i++) sim.effectsTick(0.05);
+  assert.equal(sim.ik + sim.dp, 0, 'timed effects wear off after 30s');
+
+  const { sim: s2, p: p2, add: add2 } = arena(() => 0.99);
+  add2(p2.x + 10, p2.z);
+  s2.handle('host', { t: 'hit', z: 1, dmg: 999 });
+  assert.equal(s2.powerups.length, 0, 'no drop before the first score threshold');
 });
 
 test('sim: co-op revive and Second Wind self-revive', () => {

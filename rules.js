@@ -62,7 +62,31 @@ export const INTERACT = [
   { id: 'crate', type: 'crate', cx: 26, cy: 3 },
 ];
 
-export const POINTS = { start: 500, hit: 10, kill: 60, head: 100, melee: 130 };
+export const POINTS = { start: 500, hit: 10, kill: 60, head: 100, melee: 130, nuke: 400 };
+
+export const POWERUPS = {
+  maxammo:   { name: 'MAX AMMO' },
+  instakill: { name: 'INSTA-KILL' },
+  double:    { name: 'DOUBLE POINTS' },
+  nuke:      { name: 'NUKE' },
+};
+// Drops: 2% per kill, plus one each time the team's score passes a threshold that grows 14% per drop.
+export const DROPS = { chance: 0.02, firstAt: 2000, growth: 1.14, perRound: 4, life: 30, effect: 30 };
+export const NADE = { start: 2, perRound: 2, max: 4, fuse: 3, radius: 5.5 };
+
+// Grenade flight: gravity, bounces off floor and walls (walls are treated as infinitely tall).
+export function stepGrenade(map, open, g, dt) {
+  g.vy -= 20 * dt;
+  const nx = g.x + g.vx * dt;
+  if (isSolid(map, toCell(nx), toCell(g.z), open)) g.vx *= -0.4; else g.x = nx;
+  const nz = g.z + g.vz * dt;
+  if (isSolid(map, toCell(g.x), toCell(nz), open)) g.vz *= -0.4; else g.z = nz;
+  g.y += g.vy * dt;
+  if (g.y > 0.08) return;
+  g.y = 0.08;
+  if (g.vy < -1.5) { g.vy *= -0.35; g.vx *= 0.6; g.vz *= 0.6; }
+  else { g.vy = 0; const f = Math.max(0, 1 - 5 * dt); g.vx *= f; g.vz *= f; }
+}
 export const ZOMBIE_SPEEDS = [1.5, 3.4, 5.0]; // walk, run, sprint (m/s)
 
 export const cellCenter = (cx, cy) => ({ x: (cx + 0.5) * CELL, z: (cy + 0.5) * CELL });

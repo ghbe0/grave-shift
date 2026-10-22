@@ -18,8 +18,8 @@
   input { font: inherit; background: #111; color: var(--ink); border: 1px solid #333; padding: 9px 12px; }
   input:focus { outline: 1px solid var(--red); }
 
-  .panel { position: fixed; inset: 0; display: grid; place-items: center; background: radial-gradient(ellipse at center, rgba(40, 6, 4, 0.55), rgba(0, 0, 0, 0.92)); z-index: 10; padding: 16px; }
-  .card { width: min(520px, 100%); background: var(--panel); border: 1px solid #2a2a2a; border-top: 3px solid var(--red); padding: 28px; }
+  .panel { position: fixed; inset: 0; display: flex; overflow-y: auto; background: radial-gradient(ellipse at center, rgba(40, 6, 4, 0.55), rgba(0, 0, 0, 0.92)); z-index: 10; padding: 16px; }
+  .card { margin: auto; width: min(520px, 100%); background: var(--panel); border: 1px solid #2a2a2a; border-top: 3px solid var(--red); padding: 28px; }
   .card h1 { margin: 0; font: 900 52px/1 Impact, "Arial Narrow", sans-serif; letter-spacing: 0.06em; color: var(--red); text-shadow: 0 0 24px rgba(216, 38, 28, 0.5); }
   .card h2 { margin: 0 0 16px; font: 800 30px/1 Impact, sans-serif; letter-spacing: 0.08em; color: var(--red); }
   .sub { color: var(--dim); margin: 6px 0 22px; }
@@ -58,6 +58,14 @@
   #mag { font: 900 44px/1 Impact, sans-serif; }
   #res { font: 700 22px Impact, sans-serif; color: var(--dim); margin-left: 6px; }
   #pop { position: absolute; right: 28px; bottom: 150px; font: 700 18px Impact, sans-serif; color: #ffd84a; opacity: 0; transition: opacity 0.4s, transform 0.4s; }
+  #nades { display: block; margin-top: 4px; color: #b9c48a; font-size: 18px; letter-spacing: 3px; }
+  #cook { position: absolute; left: 50%; top: 54%; transform: translateX(-50%); font: 700 18px Impact, sans-serif; color: #ff6a3d; text-shadow: 0 1px 3px #000; }
+  #powers { position: absolute; bottom: 24px; width: 100%; display: flex; justify-content: center; gap: 14px; }
+  #powers div { display: flex; flex-direction: column; align-items: center; font: 700 16px Impact, sans-serif; text-shadow: 0 1px 3px #000; }
+  #powers img { width: 48px; height: 48px; filter: drop-shadow(0 0 8px #4dff7a); }
+  #powers .blink { animation: blink 0.4s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0.15; } }
+  #flash { position: absolute; inset: 0; background: #fff; opacity: 0; transition: opacity 1.6s ease-out; }
 </style>
 <script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }</script>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
@@ -76,8 +84,11 @@
   <div id="revbar" hidden><div></div></div>
   <div id="toast"></div>
   <div id="pop"></div>
+  <div id="cook"></div>
+  <div id="powers"></div>
+  <div id="flash"></div>
   <div id="bl"><div id="perks"></div><div id="round"></div></div>
-  <div id="br"><div id="scores"></div><div id="ammo"><span id="wname"></span><b id="mag"></b><span id="res"></span></div></div>
+  <div id="br"><div id="scores"></div><div id="ammo"><span id="wname"></span><b id="mag"></b><span id="res"></span><span id="nades" title="Frag grenades"></span></div></div>
 </div>
 
 <div id="menu" class="panel">
@@ -94,7 +105,7 @@
     <div class="controls">
       <div><b>WASD</b> move</div><div><b>Shift</b> sprint</div><div><b>C</b> crouch / slide</div><div><b>Space</b> jump</div>
       <div><b>Mouse</b> shoot / aim</div><div><b>R</b> reload</div><div><b>1 2 / wheel</b> switch</div><div><b>V</b> melee</div>
-      <div><b>F</b> buy / revive</div><div><b>Esc</b> pause / invite</div>
+      <div><b>F</b> buy / revive</div><div><b>G</b> grenade (hold to cook)</div><div><b>Esc</b> pause / invite</div>
     </div>
   </div>
 </div>
