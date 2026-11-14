@@ -1,3 +1,7 @@
-.codegraph/
-.claude/
 node_modules/
+dist/
+target/
+src/core/sim.wasm
+.claude/
+.codegraph/
+*.log

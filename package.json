@@ -1,9 +1,23 @@
 {
   "name": "grave-shift",
   "private": true,
+  "version": "2.0.0",
   "type": "module",
   "scripts": {
-    "test": "node --test",
-    "start": "python -m http.server 8080"
+    "wasm": "node tools/build-wasm.mjs",
+    "assets": "node tools/gen-assets.mjs",
+    "dev": "npm run wasm && vite",
+    "build": "npm run wasm && tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "npm run wasm && cargo test && vitest run"
+  },
+  "dependencies": {
+    "peerjs": "^1.5.5"
+  },
+  "devDependencies": {
+    "@webgpu/types": "^0.1.60",
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0",
+    "vitest": "^3.0.0"
   }
 }

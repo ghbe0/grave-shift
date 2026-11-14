@@ -1,0 +1,8 @@
+[package]
+name = "gs-sim"
+version = "0.1.0"
+edition = "2021"
+description = "Grave Shift deterministic simulation core (movement, combat, survival, loadouts). No dependencies; raw C ABI for Wasm."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
