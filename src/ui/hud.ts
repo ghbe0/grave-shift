@@ -135,7 +135,7 @@ export class Hud {
     setHtml('quest', lines.join(''));
 
     const life = p[P.life];
-    $('prompt').textContent = life === 1 ? (p[P.self_revive] > 0 ? 'Second Wind: getting back up...' : `Down! Bleeding out in ${Math.ceil(p[P.down_t])}s`) : life === 2 ? (survival ? 'You return next round' : `Respawning in ${Math.ceil(p[P.respawn_t])}`) : this.prompt(p, s, snap);
+    $('prompt').textContent = hdr[H.phase] === 3 ? 'Press Esc to leave' : life === 1 ? (p[P.self_revive] > 0 ? 'Second Wind: getting back up...' : `Down! Bleeding out in ${Math.ceil(p[P.down_t])}s`) : life === 2 ? (survival ? 'You return next round' : `Respawning in ${Math.ceil(p[P.respawn_t])}`) : this.prompt(p, s, snap);
     const reviving = p[P.revive_t];
     ($('progress') as HTMLElement).style.width = reviving > 0 && reviving < 1 ? `${reviving * 100}%` : '0';
 

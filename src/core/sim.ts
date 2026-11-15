@@ -53,10 +53,17 @@ export class Sim {
   }
 
   static async load(source: Response | BufferSource): Promise<Sim> {
-    const result = source instanceof Response
-      ? await WebAssembly.instantiateStreaming(source, {})
-      : await WebAssembly.instantiate(source as BufferSource, {});
-    return new Sim(result.instance);
+    if (source instanceof Response) {
+      if (!source.ok) throw new Error(`Could not download the game core (HTTP ${source.status})`);
+      // Streaming compile needs the server to send application/wasm; fall back if it does not.
+      const copy = source.clone();
+      try {
+        return new Sim((await WebAssembly.instantiateStreaming(source, {})).instance);
+      } catch {
+        source = await copy.arrayBuffer();
+      }
+    }
+    return new Sim((await WebAssembly.instantiate(source as BufferSource, {})).instance);
   }
 
   /** The shared buffer. Re-created if Wasm memory grew, which detaches old views. */

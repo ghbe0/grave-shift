@@ -1,19 +1,19 @@
-# Builds the Rust simulation core to WebAssembly, type-checks and bundles the client, runs the
-# tests, and publishes dist/ to GitHub Pages.
+# Builds the Rust simulation core to WebAssembly, type-checks and bundles the client, runs the unit
+# tests, then serves the bundle the way GitHub Pages does and plays it in headless Chromium
+# (solo on WebGL2 and WebGPU, and a two-player party over real WebRTC). Pushes to main that pass
+# everything are published to GitHub Pages.
 #
 # One-time setup: Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
-name: Deploy to GitHub Pages
+name: Build, test and deploy
 
 on:
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages-${{ github.ref }}
@@ -47,18 +47,67 @@ jobs:
       - name: Test client (Wasm bindings, netcode, glTF loader)
         run: npx vitest run
 
-      - uses: actions/upload-pages-artifact@v3
-        if: github.event_name != 'pull_request'
+      - uses: actions/upload-artifact@v4
         with:
+          name: site
           path: dist
+          retention-days: 7
 
-  deploy:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+  e2e:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx playwright install --with-deps chromium
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: site
+          path: dist
+
+      - name: Play the built site in headless Chromium
+        run: |
+          node tools/serve-pages.mjs 4180 /grave-shift/ &
+          sleep 1
+          node tests/e2e/smoke.mjs http://localhost:4180/grave-shift/
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-results
+          path: e2e-results
+          retention-days: 7
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build, e2e]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: site
+          path: dist
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
       - id: deployment
         uses: actions/deploy-pages@v4

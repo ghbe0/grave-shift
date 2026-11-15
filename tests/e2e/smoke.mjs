@@ -1,0 +1,177 @@
+// End-to-end check of the built site, served the way GitHub Pages serves it.
+//   node tools/serve-pages.mjs 4180 &  node tests/e2e/smoke.mjs http://localhost:4180/grave-shift/
+// Set E2E_SKIP_PEERJS=1 where the public PeerJS broker is unreachable (offline sandboxes).
+// Writes screenshots and a summary to e2e-results/. Exits non-zero if any check fails.
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { chromium } from 'playwright';
+
+const SITE = process.argv[2] ?? 'http://localhost:4180/grave-shift/';
+const OUT = 'e2e-results';
+const skipPeer = process.env.E2E_SKIP_PEERJS === '1';
+mkdirSync(OUT, { recursive: true });
+
+const results = [];
+const check = async (name, fn) => {
+  const t0 = Date.now();
+  try {
+    const detail = await fn();
+    results.push({ name, ok: true, detail, secs: (Date.now() - t0) / 1000 });
+    console.log(`PASS ${name}`, detail ?? '');
+  } catch (e) {
+    results.push({ name, ok: false, detail: String(e?.message ?? e).split('\n')[0], secs: (Date.now() - t0) / 1000 });
+    console.log(`FAIL ${name}: ${e?.message ?? e}`);
+  }
+};
+
+const browser = await chromium.launch({
+  args: [
+    // Software WebGPU and WebGL so the test runs on machines without a GPU.
+    '--enable-unsafe-webgpu', '--use-webgpu-adapter=swiftshader', '--enable-unsafe-swiftshader', '--use-angle=swiftshader',
+    // Let two tabs on one machine connect over WebRTC without resolving mDNS host candidates.
+    '--disable-features=WebRtcHideLocalIpsWithMdns',
+    '--autoplay-policy=no-user-gesture-required',
+  ],
+});
+
+/** A fresh browser profile (own localStorage), collecting console errors and failed requests. */
+async function openPage(query = '', name = 'page') {
+  const ctx = await browser.newContext({ viewport: { width: 1024, height: 576 } });
+  const page = await ctx.newPage();
+  page.problems = [];
+  page.on('console', m => { if (m.type() === 'error') page.problems.push(`${name} console: ${m.text().slice(0, 200)}`); });
+  page.on('pageerror', e => page.problems.push(`${name} pageerror: ${e.message}`));
+  page.on('response', r => { if (r.status() >= 400) page.problems.push(`${name} HTTP ${r.status()} ${r.url()}`); });
+  page.on('requestfailed', r => { if (!r.url().includes('peerjs')) page.problems.push(`${name} request failed ${r.url()} ${r.failure()?.errorText}`); });
+  await page.goto(SITE + query);
+  await page.waitForSelector('#screen-main:not([hidden])', { timeout: 30000 });
+  return page;
+}
+const assertClean = page => { if (page.problems.length) throw new Error(page.problems.slice(0, 5).join(' | ')); };
+
+/** Lets a headless page play: pretend the pointer is locked and close the menus. */
+const engage = page => page.evaluate(() => {
+  const a = window.app;
+  Object.defineProperty(a.input, 'locked', { get: () => true, configurable: true });
+  a.input.lock = () => {};
+  a.show('none');
+});
+const hdr = page => page.evaluate(() => {
+  const a = window.app, s = a.session, H = a.sim.L.H;
+  if (!s?.snap) return null;
+  const h = s.snap.hdr;
+  return { round: h[H.round], phase: h[H.phase], players: h[H.n_players], zombies: s.zombies().length, renderer: a.renderer.kind };
+});
+const waitRound = (page, timeout = 60000) => page.waitForFunction(() => {
+  const a = window.app, s = a.session; return s?.snap && s.snap.hdr[a.sim.L.H.round] >= 1 && s.zombies().length > 0;
+}, null, { timeout, polling: 250 });
+
+async function shoot(page, file) {
+  // WebGPU canvases are not captured by headless screenshots, so read the frame back and overlay it.
+  await page.evaluate(async () => {
+    const r = window.app.renderer;
+    if (!r.capture) return;
+    const img = await r.capture();
+    const c = document.createElement('canvas');
+    c.width = img.width; c.height = img.height;
+    c.getContext('2d').putImageData(img, 0, 0);
+    c.style.cssText = 'position:fixed;inset:0;width:100%;height:100%';
+    document.body.insertBefore(c, document.body.firstChild);
+  });
+  await page.screenshot({ path: `${OUT}/${file}` });
+}
+
+await check('site loads under the Pages sub-path with no errors or 404s', async () => {
+  const page = await openPage('', 'main');
+  const title = await page.title();
+  const info = await page.textContent('#renderer-info');
+  // A missing asset only shows up once a match loads models, so start one briefly.
+  await page.evaluate(() => document.getElementById('btn-solo').click());
+  await page.waitForFunction(() => window.app.session?.snap, null, { timeout: 20000 });
+  await page.waitForTimeout(3000);
+  await page.screenshot({ path: `${OUT}/menu-and-hud.png` });
+  assertClean(page);
+  await page.context().close();
+  return `${title} · ${info}`;
+});
+
+await check('solo survival on WebGL2: round starts and zombies spawn', async () => {
+  const page = await openPage('?renderer=webgl2', 'webgl2');
+  await page.evaluate(() => document.getElementById('btn-solo').click());
+  await engage(page);
+  await waitRound(page);
+  await page.waitForTimeout(1500);
+  await shoot(page, 'solo-webgl2.png');
+  const h = await hdr(page);
+  assertClean(page);
+  await page.context().close();
+  if (h.renderer !== 'webgl2') throw new Error(`renderer is ${h.renderer}`);
+  return h;
+});
+
+await check('solo survival on WebGPU (software adapter)', async () => {
+  const page = await openPage('?renderer=webgpu&offscreen', 'webgpu');
+  await page.evaluate(() => document.getElementById('btn-solo').click());
+  await engage(page);
+  await waitRound(page);
+  await shoot(page, 'solo-webgpu.png');
+  const h = await hdr(page);
+  assertClean(page);
+  await page.context().close();
+  if (h.renderer !== 'webgpu') throw new Error(`renderer is ${h.renderer}`);
+  return h;
+});
+
+/** Host + guest in separate profiles. The guest joins by opening the invite link. */
+async function party(net) {
+  const q = net === 'local' ? '?net=local&renderer=webgl2&low' : '?renderer=webgl2&low';
+  const host = await openPage(q, `${net}-host`);
+  await host.fill('#name', 'Host');
+  await host.click('#btn-host');
+  await host.waitForSelector('#screen-lobby:not([hidden])', { timeout: 30000 });
+  const code = await host.textContent('#lobby-code');
+  const link = await host.inputValue('#lobby-link');
+  if (!/^[A-Z2-9]{6}$/.test(code)) throw new Error(`bad code ${code}`);
+  if (link !== `${SITE}?party=${code}`) throw new Error(`invite link is ${link}`);
+
+  // The invite link with the debug switches kept, so the guest uses the same transport.
+  const guest = await openPage(`${q}&party=${code}`, `${net}-guest`);
+  if ((await guest.inputValue('#join-code')) !== code) throw new Error('?party= did not fill the code');
+  await guest.fill('#name', 'Guest');
+  await guest.click('#btn-join');
+  await guest.waitForSelector('#screen-lobby:not([hidden])', { timeout: 30000 });
+  await guest.click('#btn-ready');
+  await host.waitForFunction(() => document.querySelector('#lobby-players')?.textContent.includes('ready'), null, { timeout: 10000 });
+  await host.click('#btn-start');
+  await guest.waitForFunction(() => window.app.session?.snap, null, { timeout: 20000 });
+  await engage(host);
+  await engage(guest);
+  // The guest walks forward; its position must reach the host and come back in snapshots.
+  await guest.evaluate(() => { window.app.input.move = () => [0, 1]; });
+  await waitRound(guest, 60000);
+  await guest.waitForTimeout(2000);
+  const g = await guest.evaluate(() => {
+    const a = window.app, s = a.session, P = a.sim.L.P;
+    const auth = s.snap.players.find(p => p[P.id] === s.selfId), me = s.local();
+    return { gap: Math.hypot(me[P['ctl.pos']] - auth[P['ctl.pos']], me[P['ctl.pos'] + 2] - auth[P['ctl.pos'] + 2]), moved: Math.hypot(auth[P['ctl.vel']], auth[P['ctl.vel'] + 2]) > 0.5 || auth[P.ack] > 60 };
+  });
+  await shoot(guest, `party-${net}-guest.png`);
+  const h = await hdr(guest);
+  assertClean(host);
+  assertClean(guest);
+  await host.context().close();
+  await guest.context().close();
+  if (h.players !== 2) throw new Error(`guest sees ${h.players} players`);
+  if (!g.moved) throw new Error('host never applied the guest\'s input');
+  if (g.gap > 3) throw new Error(`prediction is ${g.gap.toFixed(1)} m from the host`);
+  return { code, ...h, predictionGap: +g.gap.toFixed(2) };
+}
+
+await check('party over the same-browser transport (offline)', () => party('local'));
+if (skipPeer) results.push({ name: 'party over WebRTC via the public PeerJS broker', ok: true, detail: 'skipped (E2E_SKIP_PEERJS=1)' });
+else await check('party over WebRTC via the public PeerJS broker', () => party('peer'));
+
+await browser.close();
+writeFileSync(`${OUT}/summary.json`, JSON.stringify(results, null, 2));
+const failed = results.filter(r => !r.ok);
+console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
+process.exit(failed.length ? 1 : 0);
