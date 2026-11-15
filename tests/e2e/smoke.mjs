@@ -33,9 +33,12 @@ const browser = await chromium.launch({
   ],
 });
 
-/** A fresh browser profile (own localStorage), collecting console errors and failed requests. */
-async function openPage(query = '', name = 'page') {
-  const ctx = await browser.newContext({ viewport: { width: 1024, height: 576 } });
+/**
+ * Opens the site in a fresh browser profile (own localStorage), or in `ctx` if given, collecting
+ * console errors and failed requests.
+ */
+async function openPage(query = '', name = 'page', ctx = null) {
+  ctx ??= await browser.newContext({ viewport: { width: 1024, height: 576 } });
   const page = await ctx.newPage();
   page.problems = [];
   page.on('console', m => { if (m.type() === 'error') page.problems.push(`${name} console: ${m.text().slice(0, 200)}`); });
@@ -121,10 +124,15 @@ await check('solo survival on WebGPU (software adapter)', async () => {
   return h;
 });
 
-/** Host + guest in separate profiles. The guest joins by opening the invite link. */
+/**
+ * Host + guest. The guest joins by opening the invite link. Over WebRTC they are separate browser
+ * profiles, like two people; the offline transport (BroadcastChannel) only reaches pages in the
+ * same profile, so there they share one.
+ */
 async function party(net) {
   const q = net === 'local' ? '?net=local&renderer=webgl2&low' : '?renderer=webgl2&low';
   const host = await openPage(q, `${net}-host`);
+  const shared = net === 'local' ? host.context() : null;
   await host.fill('#name', 'Host');
   await host.click('#btn-host');
   await host.waitForSelector('#screen-lobby:not([hidden])', { timeout: 30000 });
@@ -134,7 +142,9 @@ async function party(net) {
   if (link !== `${SITE}?party=${code}`) throw new Error(`invite link is ${link}`);
 
   // The invite link with the debug switches kept, so the guest uses the same transport.
-  const guest = await openPage(`${q}&party=${code}`, `${net}-guest`);
+  // A shared profile also shares the saved name, which would make the invite link auto-join as "Host".
+  if (shared) await host.evaluate(() => localStorage.removeItem('gs.name'));
+  const guest = await openPage(`${q}&party=${code}`, `${net}-guest`, shared);
   if ((await guest.inputValue('#join-code')) !== code) throw new Error('?party= did not fill the code');
   await guest.fill('#name', 'Guest');
   await guest.click('#btn-join');
@@ -159,7 +169,7 @@ async function party(net) {
   assertClean(host);
   assertClean(guest);
   await host.context().close();
-  await guest.context().close();
+  if (!shared) await guest.context().close();
   if (h.players !== 2) throw new Error(`guest sees ${h.players} players`);
   if (!g.moved) throw new Error('host never applied the guest\'s input');
   if (g.gap > 3) throw new Error(`prediction is ${g.gap.toFixed(1)} m from the host`);
