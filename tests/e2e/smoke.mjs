@@ -11,7 +11,12 @@ const skipPeer = process.env.E2E_SKIP_PEERJS === '1';
 mkdirSync(OUT, { recursive: true });
 
 const results = [];
+/** Browser profiles opened by the current check; always closed afterwards so a failure cannot leave
+ *  pages rendering in the background and starve the next check. */
+let opened = [];
+const only = process.env.E2E_ONLY;
 const check = async (name, fn) => {
+  if (only && !name.includes(only)) return;
   const t0 = Date.now();
   try {
     const detail = await fn();
@@ -20,6 +25,9 @@ const check = async (name, fn) => {
   } catch (e) {
     results.push({ name, ok: false, detail: String(e?.message ?? e).split('\n')[0], secs: (Date.now() - t0) / 1000 });
     console.log(`FAIL ${name}: ${e?.message ?? e}`);
+  } finally {
+    await Promise.all(opened.map(c => c.close().catch(() => {})));
+    opened = [];
   }
 };
 
@@ -38,15 +46,20 @@ const browser = await chromium.launch({
  * console errors and failed requests.
  */
 async function openPage(query = '', name = 'page', ctx = null) {
-  ctx ??= await browser.newContext({ viewport: { width: 1024, height: 576 } });
+  if (!ctx) {
+    ctx = await browser.newContext({ viewport: { width: 1024, height: 576 } });
+    opened.push(ctx);
+  }
   const page = await ctx.newPage();
+  // Software rendering on CI machines is slow; give every wait room.
+  page.setDefaultTimeout(90000);
   page.problems = [];
   page.on('console', m => { if (m.type() === 'error') page.problems.push(`${name} console: ${m.text().slice(0, 200)}`); });
   page.on('pageerror', e => page.problems.push(`${name} pageerror: ${e.message}`));
   page.on('response', r => { if (r.status() >= 400) page.problems.push(`${name} HTTP ${r.status()} ${r.url()}`); });
   page.on('requestfailed', r => { if (!r.url().includes('peerjs')) page.problems.push(`${name} request failed ${r.url()} ${r.failure()?.errorText}`); });
   await page.goto(SITE + query);
-  await page.waitForSelector('#screen-main:not([hidden])', { timeout: 30000 });
+  await page.waitForSelector('#screen-main:not([hidden])', { timeout: 90000 });
   return page;
 }
 const assertClean = page => { if (page.problems.length) throw new Error(page.problems.slice(0, 5).join(' | ')); };
@@ -70,8 +83,11 @@ const waitRound = (page, timeout = 60000) => page.waitForFunction(() => {
 
 async function shoot(page, file) {
   // WebGPU canvases are not captured by headless screenshots, so read the frame back and overlay it.
+  // Then stop drawing: a screenshot waits for the page to produce a frame, and software-rendered
+  // frames are slow enough to time it out.
   await page.evaluate(async () => {
     const r = window.app.renderer;
+    window.app.frame = () => {};
     if (!r.capture) return;
     const img = await r.capture();
     const c = document.createElement('canvas');
@@ -80,7 +96,7 @@ async function shoot(page, file) {
     c.style.cssText = 'position:fixed;inset:0;width:100%;height:100%';
     document.body.insertBefore(c, document.body.firstChild);
   });
-  await page.screenshot({ path: `${OUT}/${file}` });
+  await page.screenshot({ path: `${OUT}/${file}`, timeout: 120000 });
 }
 
 await check('site loads under the Pages sub-path with no errors or 404s', async () => {
@@ -91,7 +107,8 @@ await check('site loads under the Pages sub-path with no errors or 404s', async 
   await page.evaluate(() => document.getElementById('btn-solo').click());
   await page.waitForFunction(() => window.app.session?.snap, null, { timeout: 20000 });
   await page.waitForTimeout(3000);
-  await page.screenshot({ path: `${OUT}/menu-and-hud.png` });
+  await page.evaluate(() => { window.app.frame = () => {}; });
+  await page.screenshot({ path: `${OUT}/menu-and-hud.png`, timeout: 120000 });
   assertClean(page);
   await page.context().close();
   return `${title} · ${info}`;
