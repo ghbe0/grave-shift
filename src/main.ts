@@ -6,6 +6,7 @@ import { Input } from './engine/input';
 import { Ticker } from './engine/ticker';
 import { Scene } from './game/scene';
 import { Session } from './game/session';
+import { streamMaterials } from './gfx/materials';
 import { createRenderer, type Renderer } from './gfx/renderer';
 import { clientToken, GuestLobby, HostLobby, MODES, type KickReason, type LobbyState, type StartMsg } from './netcode/lobby';
 import { codeFromUrl, normalizeCode, partyLink, setUrlCode } from './netcode/party';
@@ -51,6 +52,8 @@ class App {
   private last = performance.now();
   private lastSim = performance.now();
   private zoom = 1;
+  /** Resolves when every procedural material layer is on the GPU. */
+  materials: Promise<void> = Promise.resolve();
 
   async init(): Promise<void> {
     this.sim = await loadSim();
@@ -60,7 +63,12 @@ class App {
     const quality = { shadowSize: params.has('low') ? 1024 : 2048, post: !params.has('low'), offscreen: params.has('offscreen') };
     this.renderer = await createRenderer(this.canvas, params.get('renderer'), quality);
     this.canvas = $<HTMLCanvasElement>('canvas') ?? this.canvas;
-    $('renderer-info').textContent = `Renderer: ${this.renderer.kind === 'webgpu' ? 'WebGPU' : 'WebGL2 (fallback)'}`;
+    const rendererName = this.renderer.kind === 'webgpu' ? 'WebGPU' : 'WebGL2 (fallback)';
+    $('renderer-info').textContent = `Renderer: ${rendererName} · generating materials...`;
+    // Materials stream in while the menu is up; the level shows neutral grey until each arrives.
+    this.materials = streamMaterials(this.renderer, this.sim, (done, total) => {
+      $('renderer-info').textContent = done < total ? `Renderer: ${rendererName} · generating materials ${done}/${total}` : `Renderer: ${rendererName}`;
+    });
     this.editor = new LoadoutEditor(this.sim, $('loadout-grid'), $('loadout-points'), $('loadout-error'));
     this.editor.onChange = l => { this.host?.setLoadout(l); this.guest?.setLoadout(l); };
     this.bindMenus();
@@ -83,7 +91,8 @@ class App {
   private name(): string { return $<HTMLInputElement>('name').value.trim(); }
 
   private resize(): void {
-    const dpr = Math.min(devicePixelRatio, 2);
+    // ?low renders at half resolution for weak GPUs (and the automated browser tests).
+    const dpr = Math.min(devicePixelRatio, 2) * (params.has('low') ? 0.5 : 1);
     const [w, h] = [Math.round(innerWidth * dpr), Math.round(innerHeight * dpr)];
     this.canvas.width = w;
     this.canvas.height = h;

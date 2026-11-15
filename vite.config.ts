@@ -4,5 +4,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   base: './',
   build: { target: 'es2022', sourcemap: true },
+  // Module workers so the texture worker can import the shared Wasm bindings.
+  worker: { format: 'es' },
   test: { include: ['tests/**/*.test.ts'] },
 });

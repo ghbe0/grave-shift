@@ -29,9 +29,9 @@ export class Hud {
     switch (e[0]) {
       case V.hit: if (e[1] === me) { this.hitUntil = performance.now() + 120; this.hitKill = e[4] > 0; } break;
       case V.round: this.announce(e[2] ? `Round ${e[1]} survived` : s.start.mode === 0 ? `Round ${e[1]}` : 'Fight!'); break;
-      case V.pdown: this.say(`${this.name(e[1])} is down`); break;
-      case V.pdeath: this.say(e[2] >= 0 ? `${this.name(e[2])} eliminated ${this.name(e[1])}` : `${this.name(e[1])} bled out`); break;
-      case V.revive: this.say(`${this.name(e[1])} is back up`); break;
+      case V.pdown: this.say(e[1] === me ? 'You are down' : `${this.name(e[1])} is down`); break;
+      case V.pdeath: this.say(e[2] >= 0 ? `${this.name(e[2])} eliminated ${this.name(e[1])}` : e[1] === me ? 'You bled out' : `${this.name(e[1])} bled out`); break;
+      case V.revive: this.say(e[1] === me ? 'You are back up' : `${this.name(e[1])} is back up`); break;
       case V.door: this.say(`Opened ${cat.maps[s.start.map].doors[e[1]] ?? 'a door'}`); break;
       case V.power: this.announce('Power restored'); break;
       case V.powerup: if (e[5]) this.announce(cat.powerups[e[1]] ?? ''); break;

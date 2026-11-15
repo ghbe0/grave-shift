@@ -2,7 +2,12 @@
 // buffer plus draw ranges. Everything (greybox cubes, characters, glTF models) goes through the
 // same instanced PBR path, so the WebGPU and WebGL2 backends only differ in how they draw it.
 export const VERTEX_FLOATS = 8; // position, normal, uv
-export const INSTANCE_FLOATS = 24; // mat4, rgba, (metallic, roughness, emissive, flags)
+/** Procedural material layers (see crates/sim/src/texgen.rs) and their base resolution. */
+export const MAT_LAYERS = 10;
+export const MAT_SIZE = 512;
+export const MAT_MIPS = Math.log2(MAT_SIZE) + 1;
+export const MAT = { concrete: 0, floor: 1, painted: 2, rust: 3, wood: 4, brick: 5, gunmetal: 6, fabric: 7, skin: 8, polymer: 9 } as const;
+export const INSTANCE_FLOATS = 24; // mat4, (rgb tint, material layer + 1), (metallic, roughness, emissive, flags)
 export const MAX_LIGHTS = 16;
 export const LIGHT_FLOATS = 12; // pos+radius, rgb+intensity, dir+cos(cone) (cone 0 = point light)
 
@@ -32,6 +37,10 @@ export interface PostSettings {
   dofFocus: number;
   dofAmount: number;
   vignette: number;
+  /** Film grain strength, saturation (1 = unchanged) and S-curve contrast (0 = none). */
+  grain: number;
+  saturation: number;
+  contrast: number;
   /** Red edge flash when hurt, 0..1. */
   damage: number;
   time: number;
@@ -59,6 +68,11 @@ export interface Frame {
 export interface Renderer {
   readonly kind: 'webgpu' | 'webgl2';
   createMesh(data: MeshData): number;
+  /**
+   * Uploads one material layer: `data` is the surface mip chain followed by the detail mip chain
+   * (RGBA8, MAT_SIZE square down to 1x1). `tile` is metres per repeat.
+   */
+  setMaterial(layer: number, data: Uint8Array, tile: number): void;
   resize(width: number, height: number): void;
   render(frame: Frame): void;
 }
@@ -103,5 +117,81 @@ export function cubeMesh(): MeshData {
     }
     idx.push(f * 4, f * 4 + 1, f * 4 + 2, f * 4, f * 4 + 2, f * 4 + 3);
   });
+  return { vertices: new Float32Array(v), indices: new Uint16Array(idx) };
+}
+
+/** Byte offset of mip `level` of map `map` (0 surface, 1 detail) in a material layer upload. */
+export function matOffset(map: number, level: number): number {
+  let off = 0;
+  for (let m = 0; m <= map; m++) {
+    for (let l = 0; l < MAT_MIPS; l++) {
+      if (m === map && l === level) return off;
+      const s = MAT_SIZE >> l;
+      off += s * s * 4;
+    }
+  }
+  return off;
+}
+
+/** A neutral layer (mid-grey, rough, flat) shown until the generated one arrives. */
+export function flatMaterial(): Uint8Array {
+  const out = new Uint8Array(matOffset(1, 0) * 2);
+  for (let map = 0; map < 2; map++) {
+    const texel = map === 0 ? [118, 118, 118, 217] : [128, 128, 0, 255];
+    const start = matOffset(map, 0), end = map === 0 ? matOffset(1, 0) : out.length;
+    for (let i = start; i < end; i += 4) out.set(texel, i);
+  }
+  return out;
+}
+
+/**
+ * Unit sphere (radius 0.5) with smooth normals. Scaled along one axis it becomes the rounded,
+ * tapered limb and body shapes the characters are built from.
+ */
+export function sphereMesh(rings = 10, segs = 16): MeshData {
+  const v: number[] = [], idx: number[] = [];
+  const r = 0.5, half = 0.0;
+  // Hemisphere rings from the top pole to the bottom pole; the straight part has zero length so
+  // scaling Y stretches it into a rounded cylinder.
+  const rows: [number, number, number][] = [];
+  for (let i = 0; i <= rings; i++) {
+    const a = (i / rings) * (Math.PI / 2);
+    rows.push([Math.sin(a) * r, half + Math.cos(a) * r, Math.cos(a)]);
+  }
+  for (let i = 0; i <= rings; i++) {
+    const a = (i / rings) * (Math.PI / 2);
+    rows.push([Math.cos(a) * r, -half - Math.sin(a) * r, -Math.sin(a)]);
+  }
+  rows.forEach(([rad, y, ny], ri) => {
+    for (let j = 0; j <= segs; j++) {
+      const t = (j / segs) * Math.PI * 2;
+      const nx = Math.cos(t), nz = Math.sin(t);
+      const hn = Math.sqrt(Math.max(0, 1 - ny * ny));
+      v.push(nx * rad, y, nz * rad, nx * hn, ny, nz * hn, j / segs, ri / (rows.length - 1));
+    }
+  });
+  for (let i = 0; i < rows.length - 1; i++) {
+    for (let j = 0; j < segs; j++) {
+      const a = i * (segs + 1) + j, b = a + segs + 1;
+      idx.push(a, a + 1, b, a + 1, b + 1, b);
+    }
+  }
+  return { vertices: new Float32Array(v), indices: new Uint16Array(idx) };
+}
+
+/** Unit cylinder (radius 0.5, height 1, along Y, centred) with capped ends, for pipes and barrels. */
+export function cylinderMesh(segs = 16): MeshData {
+  const v: number[] = [], idx: number[] = [];
+  for (let j = 0; j <= segs; j++) {
+    const t = (j / segs) * Math.PI * 2, x = Math.cos(t), z = Math.sin(t);
+    v.push(x * 0.5, 0.5, z * 0.5, x, 0, z, j / segs, 0, x * 0.5, -0.5, z * 0.5, x, 0, z, j / segs, 1);
+  }
+  for (let j = 0; j < segs; j++) { const a = j * 2; idx.push(a, a + 2, a + 1, a + 2, a + 3, a + 1); }
+  for (const [y, ny] of [[0.5, 1], [-0.5, -1]]) {
+    const c = v.length / 8;
+    v.push(0, y, 0, 0, ny, 0, 0.5, 0.5);
+    for (let j = 0; j <= segs; j++) { const t = (j / segs) * Math.PI * 2; v.push(Math.cos(t) * 0.5, y, Math.sin(t) * 0.5, 0, ny, 0, 0.5 + Math.cos(t) * 0.5, 0.5 + Math.sin(t) * 0.5); }
+    for (let j = 0; j < segs; j++) idx.push(...(ny > 0 ? [c, c + j + 2, c + j + 1] : [c, c + j + 1, c + j + 2]));
+  }
   return { vertices: new Float32Array(v), indices: new Uint16Array(idx) };
 }

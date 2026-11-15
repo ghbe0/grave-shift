@@ -1,33 +1,37 @@
-// Turns match state into a renderer `Frame`: greybox world, interactables, zombies, players, the
-// first-person weapon, tracers, muzzle flashes and lights, plus camera and post-processing settings.
+// Turns match state into a renderer `Frame`: the textured level with trim and lamps,
+// interactables, jointed animated characters, the first-person weapon and arms, tracers, muzzle
+// flashes and lights, plus camera and post-processing settings.
 import type { Sim } from '../core/sim';
 import { loadModel, type Model } from '../gfx/loader';
-import { compose, invert, lookAt, mat4, mul, ortho, perspective } from '../gfx/mat';
-import { cubeMesh, FLAG_GRID, FLAG_NOSHADOW, FLAG_VIEWMODEL, INSTANCE_FLOATS, LIGHT_FLOATS, MAX_LIGHTS, type Draw, type Frame, type Renderer } from '../gfx/renderer';
+import { compose, invert, lookAt, mat4, mul, ortho, perspective, transformPoint } from '../gfx/mat';
+import { cubeMesh, cylinderMesh, FLAG_NOSHADOW, FLAG_VIEWMODEL, INSTANCE_FLOATS, LIGHT_FLOATS, MAT, MAX_LIGHTS, sphereMesh, type Draw, type Frame, type Renderer } from '../gfx/renderer';
 import type { Session, View } from './session';
 
 type RGB = [number, number, number];
-interface Material { color: RGB; metallic: number; roughness: number; grid: boolean }
-const m = (color: RGB, metallic = 0, roughness = 0.85, grid = false): Material => ({ color, metallic, roughness, grid });
-const MATERIALS: Material[] = [
-  m([0.4, 0.41, 0.43], 0, 0.92, true), // floor
-  m([0.56, 0.57, 0.6], 0, 0.88, true), // wall
-  m([0.72, 0.48, 0.24], 0, 0.8, true), // crate block
-  m([0.3, 0.42, 0.58], 0, 0.8, true), // platform / stairs
-  m([0.62, 0.16, 0.12], 0.6, 0.45), // door
-  m([0.3, 0.3, 0.33], 0.7, 0.4), // perk machine
-  m([0.16, 0.2, 0.42], 0.5, 0.5), // mystery crate
-  m([0.42, 0.18, 0.52], 0.7, 0.35), // upgrade bench
-  m([0.75, 0.62, 0.1], 0.4, 0.5), // power switch
-  m([0.1, 0.5, 0.46], 0.5, 0.4), // tonic dispenser
-  m([0.4, 0.3, 0.18], 0, 0.8), // workbench
-  m([0.14, 0.18, 0.24], 0.6, 0.4), // console
-  m([0.24, 0.24, 0.27], 0.3, 0.6), // wall-buy pedestal
+type V3 = [number, number, number];
+
+/** Map box material id -> procedural layer and tint. */
+const SURFACES: { layer: number; tint: RGB }[] = [
+  { layer: MAT.floor, tint: [1, 1, 1] }, // 0 floor
+  { layer: MAT.concrete, tint: [1, 1, 1] }, // 1 wall
+  { layer: MAT.wood, tint: [0.95, 0.9, 0.85] }, // 2 crate stack
+  { layer: MAT.painted, tint: [0.9, 0.95, 1] }, // 3 platform / stairs
+  { layer: MAT.rust, tint: [1, 1, 1] }, // 4 door
+  { layer: MAT.painted, tint: [0.7, 0.7, 0.75] }, // 5 perk machine
+  { layer: MAT.wood, tint: [0.55, 0.5, 0.5] }, // 6 mystery crate
+  { layer: MAT.gunmetal, tint: [1.4, 1.3, 1.6] }, // 7 upgrade bench
+  { layer: MAT.painted, tint: [2.2, 1.8, 0.5] }, // 8 power switch
+  { layer: MAT.painted, tint: [0.6, 1.5, 1.4] }, // 9 tonic dispenser
+  { layer: MAT.wood, tint: [0.8, 0.75, 0.7] }, // 10 workbench
+  { layer: MAT.gunmetal, tint: [1.2, 1.2, 1.3] }, // 11 console
+  { layer: MAT.painted, tint: [0.6, 0.6, 0.6] }, // 12 wall-buy pedestal
 ];
 const PERK_COLORS: RGB[] = [[0.9, 0.2, 0.15], [0.2, 0.85, 0.3], [1, 0.65, 0.1], [0.2, 0.5, 1], [1, 0.9, 0.2], [0.7, 0.3, 1]];
 const POWERUP_COLORS: RGB[] = [[0.2, 1, 0.3], [1, 0.2, 0.2], [1, 0.85, 0.1], [0.9, 0.9, 1], [0.3, 0.6, 1]];
 export const PLAYER_COLORS: RGB[] = [[0.2, 0.55, 1], [1, 0.45, 0.15], [0.3, 0.85, 0.35], [0.9, 0.3, 0.8], [1, 0.85, 0.2], [0.3, 0.9, 0.9], [0.9, 0.25, 0.25], [0.75, 0.75, 0.8]];
-const ZOMBIE_COLORS: RGB[] = [[0.4, 0.48, 0.36], [0.5, 0.42, 0.33], [0.55, 0.28, 0.26]];
+/** Clothing tints for the undead, picked per zombie. */
+const RAGS: RGB[] = [[2.0, 1.8, 1.5], [1.4, 1.6, 2.1], [2.3, 1.9, 1.3], [1.6, 1.9, 1.5], [2.1, 1.4, 1.3]];
+const LAMP: RGB = [1.0, 0.72, 0.42];
 
 const I = { door: 1, wallbuy: 2, perk: 3, crate: 4, bench: 5, tonic: 6, power: 7, workbench: 8, part: 9, console: 10 };
 
@@ -35,41 +39,82 @@ const I = { door: 1, wallbuy: 2, perk: 3, crate: 4, bench: 5, tonic: 6, power: 7
 class Batch {
   data = new Float32Array(INSTANCE_FLOATS * 256);
   n = 0;
-  private grow(): number {
-    if ((this.n + 1) * INSTANCE_FLOATS > this.data.length) {
+  private grow(count = 1): number {
+    while ((this.n + count) * INSTANCE_FLOATS > this.data.length) {
       const d = new Float32Array(this.data.length * 2);
       d.set(this.data);
       this.data = d;
     }
-    return this.n++ * INSTANCE_FLOATS;
+    const o = this.n * INSTANCE_FLOATS;
+    this.n += count;
+    return o;
   }
-  box(x: number, y: number, z: number, sx: number, sy: number, sz: number, c: RGB, metallic: number, roughness: number, emissive = 0, flags = 0, yaw = 0, pitch = 0, roll = 0): void {
+  private tail(o: number, c: ArrayLike<number>, layer: number, metallic: number, roughness: number, emissive: number, flags: number): void {
+    this.data.set([c[0], c[1], c[2], layer + 1, metallic, roughness, emissive, flags], o + 16);
+  }
+  /** Box (or any unit mesh) with translation, scale and yaw/pitch/roll. `layer` -1 = untextured. */
+  box(x: number, y: number, z: number, sx: number, sy: number, sz: number, c: ArrayLike<number>, layer = -1, emissive = 0, flags = 0, yaw = 0, pitch = 0, roll = 0, metallic = 0, roughness = 1): void {
     const o = this.grow();
     compose(this.data, o, x, y, z, sx, sy, sz, yaw, pitch, roll);
-    this.data.set([c[0], c[1], c[2], 1, metallic, roughness, emissive, flags], o + 16);
+    this.tail(o, c, layer, metallic, roughness, emissive, flags);
   }
-  /** Instance with an explicit matrix (glTF parts). */
-  mat(matrix: Float32Array, c: ArrayLike<number>, metallic: number, roughness: number, emissive: number, flags: number): void {
+  /** Instance with an explicit matrix. */
+  mat(matrix: ArrayLike<number>, c: ArrayLike<number>, layer: number, metallic: number, roughness: number, emissive: number, flags: number): void {
     const o = this.grow();
     this.data.set(matrix, o);
-    this.data.set([c[0], c[1], c[2], 1, metallic, roughness, emissive, flags], o + 16);
+    this.tail(o, c, layer, metallic, roughness, emissive, flags);
+  }
+  /** Unit sphere stretched between two points into a limb of radius r (rz for the depth axis). */
+  limb(a: V3, b: V3, r: number, c: ArrayLike<number>, layer: number, flags = 0, rz = r, side?: V3): void {
+    const d: V3 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const len = Math.hypot(d[0], d[1], d[2]) || 1e-4;
+    const y: V3 = [d[0] / len, d[1] / len, d[2] / len];
+    // X axis: the given side direction made perpendicular to the limb.
+    let ref = side ?? (Math.abs(y[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0]);
+    let x: V3 = [ref[1] * y[2] - ref[2] * y[1], ref[2] * y[0] - ref[0] * y[2], ref[0] * y[1] - ref[1] * y[0]];
+    if (side) { const dot = side[0] * y[0] + side[1] * y[1] + side[2] * y[2]; x = [side[0] - y[0] * dot, side[1] - y[1] * dot, side[2] - y[2] * dot]; }
+    let xl = Math.hypot(x[0], x[1], x[2]);
+    if (xl < 1e-4) { ref = [1, 0, 0]; x = [ref[1] * y[2] - ref[2] * y[1], ref[2] * y[0] - ref[0] * y[2], ref[0] * y[1] - ref[1] * y[0]]; xl = Math.hypot(x[0], x[1], x[2]) || 1; }
+    x = [x[0] / xl, x[1] / xl, x[2] / xl];
+    const z: V3 = [x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]];
+    const sy = len + r * 1.6, sx = r * 2, sz = rz * 2;
+    const o = this.grow();
+    this.data.set([x[0] * sx, x[1] * sx, x[2] * sx, 0, y[0] * sy, y[1] * sy, y[2] * sy, 0, z[0] * sz, z[1] * sz, z[2] * sz, 0, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2, 1], o);
+    this.tail(o, c, layer, 0, 1, 0, flags);
   }
   append(other: Batch): void {
-    while ((this.n + other.n) * INSTANCE_FLOATS > this.data.length) { const d = new Float32Array(this.data.length * 2); d.set(this.data); this.data = d; }
-    this.data.set(other.data.subarray(0, other.n * INSTANCE_FLOATS), this.n * INSTANCE_FLOATS);
-    this.n += other.n;
+    const o = this.grow(other.n);
+    this.data.set(other.data.subarray(0, other.n * INSTANCE_FLOATS), o);
   }
 }
 
 interface Tracer { a: number[]; b: number[]; t: number; color: RGB }
 interface Flash { pos: number[]; t: number; life: number; color: RGB; radius: number; size: number }
-interface LightSrc { pos: number[]; radius: number; color: RGB; intensity: number }
+interface LightSrc { pos: number[]; radius: number; color: RGB; intensity: number; flicker?: number }
 
 export interface SceneSettings { fov: number; motionBlur: boolean; dof: boolean }
 
+/** A character's facing frame: positions are given as (right, up, forward) offsets. */
+function frame(x: number, y: number, z: number, yaw: number) {
+  const r: V3 = [Math.cos(yaw), 0, -Math.sin(yaw)], f: V3 = [-Math.sin(yaw), 0, -Math.cos(yaw)];
+  const at = (lx: number, ly: number, lz: number): V3 => [x + r[0] * lx + f[0] * lz, y + ly, z + r[2] * lx + f[2] * lz];
+  return { at, right: r, fwd: f };
+}
+
+/** Two-bone chain from `root`: thigh then shin (or upper arm then forearm), swinging in the forward plane. */
+function chain(at: (x: number, y: number, z: number) => V3, root: [number, number, number], l1: number, l2: number, a1: number, a2: number, side = 0): [V3, V3] {
+  const k: [number, number, number] = [root[0] + side * 0.5 * l1, root[1] - Math.cos(a1) * l1, root[2] + Math.sin(a1) * l1];
+  const e: [number, number, number] = [k[0] + side * l2 * 0.5, k[1] - Math.cos(a1 - a2) * l2, k[2] + Math.sin(a1 - a2) * l2];
+  return [at(...k), at(...e)];
+}
+
 export class Scene {
   private cube: number;
+  private sphere: number;
+  private cylinder: number;
   private world = new Batch();
+  private worldRound = new Batch();
+  private worldGlow = new Batch();
   private models = new Map<string, Model | null>();
   private tracers: Tracer[] = [];
   private flashes: Flash[] = [];
@@ -88,12 +133,17 @@ export class Scene {
 
   constructor(private renderer: Renderer, private sim: Sim, private session: Session) {
     this.cube = renderer.createMesh(cubeMesh());
+    this.sphere = renderer.createMesh(sphereMesh());
+    this.cylinder = renderer.createMesh(cylinderMesh());
     const b = session.boxes;
     for (let o = 0; o < b.length; o += 8) {
       const flags = b[o + 7] & 0xff;
-      if (flags & (2 | 4)) continue; // hidden or door (doors are drawn while closed)
+      if (flags & (2 | 4)) continue; // hidden, or a door (doors are drawn while closed)
       this.addBox(this.world, b, o);
+      if (b[o + 6] === 1) this.trimWall(b, o);
+      if (b[o + 6] === 2) this.crateDetail(b, o);
     }
+    this.placeLamps();
     // A barricade's boards span whichever way its opening is walled in.
     this.barrAxis = session.mapInfo.barricades.map(p => this.wallAt(p[0] - 2, p[2]) && this.wallAt(p[0] + 2, p[2]));
     for (const w of sim.catalog.weapons) this.load(`weapons/${w.slug}`);
@@ -110,9 +160,57 @@ export class Scene {
     for (let o = 0; o < b.length; o += 8) if (b[o + 6] === 1 && x > b[o] && x < b[o + 3] && z > b[o + 2] && z < b[o + 5]) return true;
     return false;
   }
-  private addBox(batch: Batch, b: Float32Array, o: number, tint?: RGB, emissive = 0): void {
-    const mat = MATERIALS[b[o + 6]] ?? MATERIALS[1];
-    batch.box((b[o] + b[o + 3]) / 2, (b[o + 1] + b[o + 4]) / 2, (b[o + 2] + b[o + 5]) / 2, b[o + 3] - b[o], b[o + 4] - b[o + 1], b[o + 5] - b[o + 2], tint ?? mat.color, mat.metallic, mat.roughness, emissive, mat.grid ? FLAG_GRID : 0);
+  /** Any visible geometry above the floor at this point. */
+  private solidAt(x: number, z: number): boolean {
+    const b = this.session.boxes;
+    for (let o = 0; o < b.length; o += 8) if (!(b[o + 7] & 2) && b[o + 4] > 0.2 && x > b[o] && x < b[o + 3] && z > b[o + 2] && z < b[o + 5]) return true;
+    return false;
+  }
+  private addBox(batch: Batch, b: Float32Array, o: number): void {
+    const s = SURFACES[b[o + 6]] ?? SURFACES[1];
+    batch.box((b[o] + b[o + 3]) / 2, (b[o + 1] + b[o + 4]) / 2, (b[o + 2] + b[o + 5]) / 2, b[o + 3] - b[o], b[o + 4] - b[o + 1], b[o + 5] - b[o + 2], s.tint, s.layer);
+  }
+
+  /** Steel skirting, a mid-height ledge and a concrete cap give walls a built, layered look. */
+  private trimWall(b: Float32Array, o: number): void {
+    const [x0, , z0, x1, y1, z1] = b.subarray(o, o + 6);
+    const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, w = x1 - x0, d = z1 - z0;
+    this.world.box(cx, 0.18, cz, w + 0.08, 0.36, d + 0.08, [0.55, 0.55, 0.6], MAT.painted);
+    this.world.box(cx, 2.6, cz, w + 0.05, 0.12, d + 0.05, [0.8, 0.8, 0.8], MAT.concrete);
+    this.world.box(cx, y1 - 0.1, cz, w + 0.12, 0.2, d + 0.12, [0.75, 0.75, 0.75], MAT.concrete);
+  }
+
+  /** Crate stacks get dark steel corner straps. */
+  private crateDetail(b: Float32Array, o: number): void {
+    const [x0, y0, z0, x1, y1, z1] = b.subarray(o, o + 6);
+    const h = y1 - y0;
+    for (const x of [x0 + 0.03, x1 - 0.03]) for (const z of [z0 + 0.03, z1 - 0.03]) this.world.box(x, y0 + h / 2, z, 0.09, h + 0.01, 0.09, [0.6, 0.6, 0.6], MAT.gunmetal);
+  }
+
+  /** Wall lamps with conduit, spaced along walls that face open floor. */
+  private placeLamps(): void {
+    const { size } = this.session.mapInfo;
+    const spots: { pos: V3; n: V3 }[] = [];
+    for (let x = 1; x < size[0]; x += 2) {
+      for (let z = 1; z < size[1]; z += 2) {
+        if (this.solidAt(x, z)) continue;
+        for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          if (this.wallAt(x + dx * 2, z + dz * 2) && !this.solidAt(x + dx, z + dz)) {
+            spots.push({ pos: [x + dx * 0.95, 3.3, z + dz * 0.95], n: [-dx, 0, -dz] });
+          }
+        }
+      }
+    }
+    const chosen: typeof spots = [];
+    for (const s of spots) if (chosen.every(c => Math.hypot(c.pos[0] - s.pos[0], c.pos[2] - s.pos[2]) > 9)) chosen.push(s);
+    chosen.forEach((s, k) => {
+      const [x, y, z] = s.pos, [nx, , nz] = s.n;
+      const along = Math.abs(nx) > 0 ? 0 : Math.PI / 2;
+      this.world.box(x + nx * 0.04, y + 0.12, z + nz * 0.04, 0.5, 0.08, 0.5, [0.7, 0.7, 0.7], MAT.gunmetal, 0, 0, along); // hood
+      this.worldGlow.box(x + nx * 0.12, y, z + nz * 0.12, 0.34, 0.1, 0.16, LAMP, -1, 6, FLAG_NOSHADOW, along + Math.PI / 2);
+      this.worldRound.box(x - nz * 0.4, y / 2, z + nx * 0.4, 0.07, y + 0.4, 0.07, [0.8, 0.8, 0.8], MAT.gunmetal); // conduit
+      this.staticLights.push({ pos: [x + nx * 0.5, y - 0.1, z + nz * 0.5], radius: 11, color: LAMP, intensity: 9, flicker: k % 5 === 2 ? k : undefined });
+    });
   }
 
   /** Visual reactions to simulation events. */
@@ -125,41 +223,170 @@ export class Scene {
       const dist = s.game.raycast(view.pos, dir, 120);
       const right = [Math.cos(view.yaw), 0, -Math.sin(view.yaw)];
       const from = [view.pos[0] + dir[0] * 0.7 + right[0] * 0.12, view.pos[1] + dir[1] * 0.7 - 0.1, view.pos[2] + dir[2] * 0.7 + right[2] * 0.12];
-      this.tracers.push({ a: from, b: [view.pos[0] + dir[0] * dist, view.pos[1] + dir[1] * dist, view.pos[2] + dir[2] * dist], t: 0.07, color: this.tracerColor(e[2]) });
+      this.tracers.push({ a: from, b: [view.pos[0] + dir[0] * dist, view.pos[1] + dir[1] * dist, view.pos[2] + dir[2] * dist], t: 0.06, color: this.tracerColor(e[2]) });
+      // Impact sparks where it hit the world.
+      if (dist < 120) this.flashes.push({ pos: [view.pos[0] + dir[0] * (dist - 0.05), view.pos[1] + dir[1] * (dist - 0.05), view.pos[2] + dir[2] * (dist - 0.05)], t: 0.08, life: 0.08, color: [1, 0.75, 0.4], radius: 3, size: 0.08 });
       this.kick = 1;
       this.muzzle = 0.05;
     } else if (e[0] === V.shot && e[1] !== s.selfId) {
       const shooter = s.players().find(p => p.id === e[1]);
       const from = shooter ? [shooter.x - Math.sin(shooter.yaw) * 0.6, shooter.y + 1.35, shooter.z - Math.cos(shooter.yaw) * 0.6] : [e[3], e[4] + 4, e[5]];
-      this.tracers.push({ a: from, b: [e[3], e[4], e[5]], t: 0.07, color: this.tracerColor(e[2]) });
-      if (shooter) this.flashes.push({ pos: from, t: 0.05, life: 0.05, color: [1, 0.8, 0.4], radius: 7, size: 0.18 });
+      this.tracers.push({ a: from, b: [e[3], e[4], e[5]], t: 0.06, color: this.tracerColor(e[2]) });
+      if (shooter) this.flashes.push({ pos: from, t: 0.05, life: 0.05, color: [1, 0.8, 0.4], radius: 7, size: 0.16 });
     } else if (e[0] === V.explode) {
       const stun = e[5] === 1;
       this.flashes.push({ pos: [e[1], e[2] + 0.5, e[3]], t: 0.35, life: 0.35, color: stun ? [0.5, 0.7, 1] : e[5] === 2 ? [1, 0.2, 0.2] : [1, 0.6, 0.2], radius: e[4] * 2.5, size: e[4] * 0.5 });
     } else if (e[0] === V.zdeath) {
-      this.flashes.push({ pos: [e[2], e[3] + 1, e[4]], t: 0.15, life: 0.15, color: [0.7, 0.1, 0.1], radius: 0, size: 0.5 });
+      this.flashes.push({ pos: [e[2], e[3] + 1, e[4]], t: 0.18, life: 0.18, color: [0.5, 0.04, 0.03], radius: 0, size: 0.6 });
     } else if (e[0] === V.powerup && e[5] === 1) {
       this.flashes.push({ pos: [e[2], e[3], e[4]], t: 0.4, life: 0.4, color: POWERUP_COLORS[e[1]] ?? [1, 1, 1], radius: 12, size: 0.8 });
     } else if ((e[0] === V.pdown || e[0] === V.zattack) && e[e[0] === V.pdown ? 1 : 2] === s.selfId) {
       this.hurt = 1;
     } else if (e[0] === V.hit) {
-      this.flashes.push({ pos: [e[5], e[6], e[7]], t: 0.1, life: 0.1, color: [0.8, 0.1, 0.1], radius: 0, size: 0.14 });
+      this.flashes.push({ pos: [e[5], e[6], e[7]], t: 0.12, life: 0.12, color: [0.45, 0.03, 0.02], radius: 0, size: 0.22 });
     }
   }
   private tracerColor(weapon: number): RGB {
     const slug = this.sim.catalog.weapons[weapon]?.slug;
-    return slug === 'arc' ? [0.3, 0.8, 1] : slug === 'stormlance' ? [0.7, 0.4, 1] : slug === 'verdict' ? [1, 0.5, 0.1] : [1, 0.9, 0.6];
+    return slug === 'arc' ? [0.3, 0.8, 1] : slug === 'stormlance' ? [0.7, 0.4, 1] : slug === 'verdict' ? [1, 0.5, 0.1] : [1, 0.85, 0.55];
   }
 
-  private drawModel(groups: Map<string, { mesh: number; shadow: boolean; batch: Batch }>, name: string, matrix: Float32Array, flags: number, shadow: boolean): void {
+  private drawModel(groups: Map<string, { mesh: number; shadow: boolean; batch: Batch }>, name: string, matrix: Float32Array, flags: number, shadow: boolean): Model | null {
     const model = this.models.get(name);
-    if (!model) return;
+    if (!model) return null;
     for (const part of model.parts) {
       const key = `${part.mesh}:${shadow}`;
       let g = groups.get(key);
       if (!g) groups.set(key, (g = { mesh: part.mesh, shadow, batch: new Batch() }));
-      g.batch.mat(matrix, part.color, part.metallic, part.roughness, part.emissive, flags);
+      g.batch.mat(matrix, part.color, part.layer, part.metallic, part.layer >= 0 ? 1 : part.roughness, part.emissive, flags);
     }
+    return model;
+  }
+
+  /**
+   * An undead body: hunched, arms reaching, a dragging gait whose speed and violence grow with its
+   * kind (0 walker, 1 runner, 2 sprinter). Built from stretched spheres so the silhouette is round.
+   */
+  private zombie(out: Batch, glow: Batch, z: { id: number; x: number; y: number; z: number; yaw: number; rec: Float32Array }, state: number, kind: number, t: number): void {
+    const turned = state === 4;
+    const rag = RAGS[z.id % RAGS.length];
+    const skinTint: RGB = turned ? [1.0, 1.2, 1.8] : [1.5, 1.5, 1.45];
+    const rise = state === 0 ? -1.1 + Math.min(1, Math.max(0, 1 - (z.rec[this.sim.L.Z.hp] ?? 1))) : 0;
+    const rate = [3.2, 6.5, 9.0][kind] ?? 3.2;
+    const ph = t * rate + z.id * 1.7;
+    const amp = [0.38, 0.6, 0.75][kind] ?? 0.4;
+    const lean = [0.5, 0.62, 0.78][kind] ?? 0.5;
+    const lurch = Math.sin(ph * 0.5 + z.id) * 0.06;
+    const bob = Math.abs(Math.sin(ph)) * 0.05 * (1 + kind * 0.5);
+    const { at, right } = frame(z.x, z.y + rise, z.z, z.yaw + lurch);
+    const hip = 0.93 + bob;
+    const chestL: [number, number, number] = [lurch * 0.3, hip + Math.cos(lean) * 0.5, Math.sin(lean) * 0.5];
+    const pelvis = at(0, hip, 0), chest = at(...chestL);
+    const headP = at(chestL[0] + Math.sin(t * 1.3 + z.id) * 0.03, chestL[1] + 0.24, chestL[2] + 0.12 + lean * 0.12);
+    // Legs: walkers drag one foot, runners stride.
+    for (const side of [-1, 1]) {
+      const sp = ph + (side > 0 ? Math.PI : 0);
+      const swing = Math.sin(sp) * amp * (kind === 0 && side > 0 ? 0.6 : 1);
+      const bend = Math.max(0, -Math.cos(sp)) * amp * 1.4 + 0.12;
+      const [knee, ankle] = chain(at, [side * 0.11, hip - 0.04, 0], 0.46, 0.44, swing, bend);
+      out.limb(at(side * 0.11, hip, 0), knee, 0.085, rag, MAT.fabric, 0, 0.09, right);
+      out.limb(knee, ankle, 0.062, rag, MAT.fabric, 0, 0.065, right);
+      const toe = at(side * 0.12 + 0, 0, 0);
+      out.limb(ankle, [ankle[0] + (toe[0] - z.x) * 0 + (ankle[0] - knee[0]) * 0 + Math.sin(-z.yaw) * 0.16, Math.max(ankle[1] - 0.05, z.y + rise + 0.04), ankle[2] - Math.cos(z.yaw) * 0.16], 0.05, [0.9, 0.9, 0.9], MAT.polymer, 0, 0.06);
+    }
+    // Torso, belly and torn shirt.
+    out.limb(pelvis, chest, 0.16, rag, MAT.fabric, 0, 0.12, right);
+    // Rib cage and shoulders, wider than the waist.
+    const ribs = at(chestL[0], chestL[1] - 0.1, chestL[2] - 0.02);
+    out.box(ribs[0], ribs[1], ribs[2], 0.46, 0.36, 0.28, rag, MAT.fabric, 0, 0, z.yaw + lurch, -lean * 0.8);
+    out.limb(at(0, hip + 0.02, 0.02), at(0, hip + 0.14, 0.05), 0.15, skinTint, MAT.skin, 0, 0.11, right);
+    out.limb(chest, headP, 0.055, skinTint, MAT.skin);
+    // Head: skull, jaw hanging open.
+    const jaw = 0.04 + Math.abs(Math.sin(t * 2.3 + z.id)) * 0.04;
+    out.box(headP[0], headP[1] + 0.05, headP[2], 0.21, 0.25, 0.23, skinTint, MAT.skin, 0, 0, z.yaw, -lean * 0.4, Math.sin(t + z.id) * 0.15);
+    const jp = at(chestL[0], chestL[1] + 0.2 - jaw, chestL[2] + 0.2 + lean * 0.12);
+    out.box(jp[0], jp[1], jp[2], 0.15, 0.06, 0.13, skinTint, MAT.skin, 0, 0, z.yaw, 0.3);
+    // Arms reach for whoever they are chasing; attacks swipe down.
+    const attack = state === 2 ? 1 : 0;
+    for (const side of [-1, 1]) {
+      const sp = ph * 0.5 + (side > 0 ? 1.4 : 0);
+      const sh = at(chestL[0] + side * 0.22, chestL[1] - 0.04, chestL[2]);
+      const reach = kind === 0 ? 0.6 + Math.sin(sp) * 0.1 : 0.3 + Math.sin(ph + (side > 0 ? Math.PI : 0)) * 0.5;
+      const raise = attack ? 0.9 + Math.sin(t * 14 + side) * 0.4 : reach;
+      const el = at(chestL[0] + side * 0.27, chestL[1] - 0.3 + raise * 0.24, chestL[2] + 0.12 + raise * 0.14);
+      const hand = at(chestL[0] + side * 0.2, chestL[1] - 0.32 + raise * 0.45, chestL[2] + 0.38 + raise * 0.12);
+      out.limb(sh, el, 0.055, rag, MAT.fabric, 0, 0.055);
+      out.limb(el, hand, 0.045, skinTint, MAT.skin, 0, 0.042);
+      out.box(hand[0], hand[1], hand[2], 0.08, 0.05, 0.11, skinTint, MAT.skin, 0, 0, z.yaw, -raise);
+    }
+    // Eyes glow through the fog.
+    const eye: RGB = turned ? [0.4, 0.8, 1] : [1, 0.62, 0.12];
+    for (const side of [-1, 1]) {
+      const e = at(chestL[0] + side * 0.05, chestL[1] + 0.32, chestL[2] + 0.24 + lean * 0.12);
+      glow.box(e[0], e[1], e[2], 0.035, 0.022, 0.02, eye, -1, 8, FLAG_NOSHADOW, z.yaw);
+    }
+  }
+
+  /** A survivor: helmet, team-coloured vest over fatigues, boots, rifle held at the ready. */
+  private survivor(out: Batch, glow: Batch, groups: Map<string, { mesh: number; shadow: boolean; batch: Batch }>, p: { id: number; x: number; y: number; z: number; yaw: number; rec: Float32Array }, t: number): void {
+    const { P } = this.sim.L;
+    const team = PLAYER_COLORS[p.id % PLAYER_COLORS.length];
+    const fatigues: RGB = [1.6, 1.7, 1.4];
+    const life = p.rec[P.life];
+    const pitch = p.rec[P['ctl.pitch']];
+    const speed = Math.hypot(p.rec[P['ctl.vel']], p.rec[P['ctl.vel'] + 2]);
+    const crouch = p.rec[P['ctl.crouched']] ? 0.4 : 0;
+    const slide = p.rec[P['ctl.mode']] === 1;
+    const { at, right } = frame(p.x, p.y, p.z, p.yaw);
+    if (life === 1) {
+      // Downed: on the ground, waving for help.
+      const torso = at(0, 0.25, 0.1), head = at(0, 0.32, 0.6);
+      out.limb(at(0, 0.2, -0.5), torso, 0.16, team, MAT.fabric, 0, 0.11);
+      out.box(head[0], head[1], head[2], 0.22, 0.24, 0.24, [0.8, 0.8, 0.8], MAT.painted, 0, 0, p.yaw);
+      glow.box(p.x, 1.4 + Math.sin(t * 4) * 0.1, p.z, 0.2, 0.2, 0.2, [0.3, 0.6, 1], -1, 4, FLAG_NOSHADOW, t * 2, 0.6);
+      return;
+    }
+    const ph = t * Math.max(2, speed * 1.4);
+    const amp = Math.min(0.55, speed * 0.07);
+    const hip = 0.95 - crouch * 0.45 - (slide ? 0.45 : 0);
+    for (const side of [-1, 1]) {
+      const sp = ph + (side > 0 ? Math.PI : 0);
+      const [knee, ankle] = slide
+        ? [at(side * 0.12, 0.35, 0.35 + (side > 0 ? 0.25 : 0)), at(side * 0.12, 0.1, 0.75 + (side > 0 ? 0.2 : 0))]
+        : chain(at, [side * 0.11, hip - 0.04, 0], 0.46, 0.44, Math.sin(sp) * amp + crouch * 0.9, Math.max(0, -Math.cos(sp)) * amp * 1.4 + crouch * 1.8 + 0.05);
+      out.limb(at(side * 0.11, hip, 0), knee, 0.09, fatigues, MAT.fabric, 0, 0.095, right);
+      out.limb(knee, ankle, 0.068, fatigues, MAT.fabric, 0, 0.07, right);
+      out.box(ankle[0] + Math.sin(-p.yaw) * 0.06, Math.max(ankle[1] - 0.04, p.y + 0.05), ankle[2] - Math.cos(p.yaw) * 0.06, 0.11, 0.1, 0.26, [0.9, 0.9, 0.9], MAT.polymer, 0, 0, p.yaw);
+    }
+    const chestL: [number, number, number] = [0, hip + 0.5, 0.05 + crouch * 0.1];
+    const pelvis = at(0, hip, 0), chest = at(...chestL);
+    out.limb(pelvis, chest, 0.17, fatigues, MAT.fabric, 0, 0.12, right);
+    // Plate carrier with pouches in the team colour.
+    out.box(chest[0], chest[1] - 0.12, chest[2], 0.42, 0.42, 0.3, team, MAT.fabric, 0, 0, p.yaw);
+    for (const lx of [-0.12, 0, 0.12]) { const q = at(lx, chestL[1] - 0.26, chestL[2] + 0.17); out.box(q[0], q[1], q[2], 0.1, 0.12, 0.06, team, MAT.fabric, 0, 0, p.yaw); }
+    // Head with helmet and goggles.
+    const head = at(0, chestL[1] + 0.27, chestL[2] + 0.02);
+    out.box(head[0], head[1], head[2], 0.2, 0.24, 0.22, [1, 0.95, 0.9], MAT.skin, 0, 0, p.yaw, pitch * 0.5);
+    out.box(head[0], head[1] + 0.09, head[2], 0.27, 0.15, 0.29, [0.6, 0.65, 0.55], MAT.painted, 0, 0, p.yaw, pitch * 0.5);
+    const goggle = at(0, chestL[1] + 0.3, chestL[2] + 0.13);
+    out.box(goggle[0], goggle[1], goggle[2], 0.2, 0.05, 0.03, [0.3, 0.3, 0.3], MAT.polymer, 0, 0, p.yaw, pitch * 0.5);
+    // Arms meet on the gun, which follows the aim pitch.
+    const gunAt = at(0.12, chestL[1] - 0.05, chestL[2] + 0.3);
+    const gm = mat4();
+    compose(gm, 0, gunAt[0], gunAt[1], gunAt[2], 1, 1, 1, p.yaw, pitch);
+    const cur = p.rec[P['arms.cur']];
+    const gun = p.rec[P[`arms.guns${cur}.id`]];
+    const model = this.drawModel(groups, `weapons/${this.sim.catalog.weapons[gun]?.slug}`, gm, 0, true);
+    const grip = transformPoint(gm, [0, -0.02, 0.01]);
+    const fore = transformPoint(gm, [0, 0.0, Math.max(-0.35, (model?.min[2] ?? -0.4) * 0.55)]);
+    for (const [side, hand] of [[1, grip], [-1, fore]] as const) {
+      const sh = at(side * 0.22, chestL[1] - 0.02, chestL[2]);
+      const el: V3 = [(sh[0] + hand[0]) / 2 + right[0] * side * 0.08, (sh[1] + hand[1]) / 2 - 0.14, (sh[2] + hand[2]) / 2 + right[2] * side * 0.08];
+      out.limb(sh, el, 0.06, fatigues, MAT.fabric, 0, 0.06);
+      out.limb(el, hand as V3, 0.05, fatigues, MAT.fabric, 0, 0.05);
+      out.box(hand[0], hand[1], hand[2], 0.08, 0.07, 0.09, [0.9, 0.9, 0.9], MAT.polymer, 0, 0, p.yaw, pitch);
+    }
+    if (p.rec[P.shield] > 0) { const q = at(0, chestL[1] - 0.1, chestL[2] - 0.22); out.box(q[0], q[1], q[2], 0.6, 0.8, 0.06, [0.8, 0.8, 0.8], MAT.rust, 0, 0, p.yaw); }
   }
 
   build(view: View, dt: number, aspect: number, settings: SceneSettings): Frame {
@@ -171,16 +398,21 @@ export class Scene {
     const me = s.local();
     const power = !!hdr?.[H.power];
     const casters = new Batch();
+    const round = new Batch();
     const glows = new Batch();
     const groups = new Map<string, { mesh: number; shadow: boolean; batch: Batch }>();
     const lights: LightSrc[] = [];
     const tmp = mat4();
 
-    // Doors still shut.
+    // Doors still shut: rusted shutter with a frame.
     const b = s.boxes;
     for (let o = 0; o < b.length; o += 8) {
       const flags = b[o + 7] & 0xff, door = (b[o + 7] >> 8) - 1;
-      if (flags & 4 && !((hdr?.[H.doors] ?? 0) & (1 << door))) this.addBox(casters, b, o);
+      if (!(flags & 4) || (hdr?.[H.doors] ?? 0) & (1 << door)) continue;
+      this.addBox(casters, b, o);
+      const [x0, , z0, x1, , z1] = b.subarray(o, o + 6);
+      for (let y = 0.4; y < 6.5; y += 0.5) casters.box((x0 + x1) / 2, y, (z0 + z1) / 2, x1 - x0 + 0.06, 0.05, z1 - z0 + 0.06, [0.8, 0.75, 0.7], MAT.rust);
+      glows.box((x0 + x1) / 2, 2.4, (z0 + z1) / 2, x1 - x0 + 0.1, 0.06, z1 - z0 + 0.1, [1, 0.25, 0.1], -1, 2.5, FLAG_NOSHADOW);
     }
 
     // Interactables: status lights and the weapons on display.
@@ -189,41 +421,47 @@ export class Scene {
       const [kind, x, y, z, , param] = it.subarray(o, o + 6);
       if (kind === I.perk) {
         const c = PERK_COLORS[param] ?? [1, 1, 1];
-        glows.box(x, 2.0, z, 1.25, 0.25, 1.25, c, 0, 0.5, power ? 2.5 : 0.05, FLAG_NOSHADOW);
-        if (power) lights.push({ pos: [x, 2.7, z], radius: 7, color: c, intensity: 5 });
+        casters.box(x, 1.15, z, 1.2, 2.3, 1.2, c, MAT.painted);
+        glows.box(x, 1.55, z, 0.9, 0.5, 1.24, c, -1, power ? 3 : 0.08, FLAG_NOSHADOW); // lit sign panel
+        glows.box(x, 2.38, z, 1.25, 0.12, 1.25, c, -1, power ? 2 : 0.05, FLAG_NOSHADOW);
+        if (power) lights.push({ pos: [x, 2.7, z], radius: 7, color: c, intensity: 6 });
       } else if (kind === I.wallbuy) {
-        compose(tmp, 0, x, 1.15, z, 1.6, 1.6, 1.6, t * 0.8, 0, 0.3);
+        compose(tmp, 0, x, 1.25, z, 1.6, 1.6, 1.6, t * 0.6, 0, 0.25);
         this.drawModel(groups, `weapons/${sim.catalog.weapons[param]?.slug}`, tmp.slice(), 0, true);
-        glows.box(x, 0.92, z, 0.62, 0.04, 0.62, [1, 0.9, 0.5], 0, 0.5, 1.2, FLAG_NOSHADOW);
+        glows.box(x, 0.92, z, 0.62, 0.04, 0.62, [1, 0.85, 0.5], -1, 1.6, FLAG_NOSHADOW);
+        lights.push({ pos: [x, 1.6, z], radius: 3.5, color: [1, 0.85, 0.5], intensity: 2 });
       } else if (kind === I.crate && hdr && k === hdr[H.crate_at]) {
         const state = hdr[H.crate_state];
-        glows.box(x, 0.93, z, 1.5, 0.06, 0.9, [0.3, 0.6, 1], 0, 0.5, state === 3 ? 0.2 : 2.5, FLAG_NOSHADOW);
-        lights.push({ pos: [x, 1.6, z], radius: 6, color: [0.3, 0.6, 1], intensity: 4 });
+        glows.box(x, 0.93, z, 1.5, 0.05, 0.9, [0.35, 0.65, 1], -1, state === 3 ? 0.2 : 3, FLAG_NOSHADOW);
+        // A beam of light marks where the crate is.
+        glows.box(x, 12, z, 0.25, 22, 0.25, [0.35, 0.6, 1], -1, state === 3 ? 0 : 0.8, FLAG_NOSHADOW);
+        lights.push({ pos: [x, 1.6, z], radius: 6, color: [0.35, 0.6, 1], intensity: 5 });
         const shown = state === 2 ? hdr[H.crate_weapon] : state === 1 ? Math.floor(t * 9) % 8 : -1;
         if (shown >= 0) {
           compose(tmp, 0, x, 1.5 + Math.sin(t * 3) * 0.05, z, 1.8, 1.8, 1.8, Math.PI / 2, 0, 0);
           this.drawModel(groups, `weapons/${sim.catalog.weapons[shown]?.slug}`, tmp.slice(), 0, true);
         }
       } else if (kind === I.bench) {
-        glows.box(x, 2.35, z, 1.0, 0.1, 1.0, [0.8, 0.3, 1], 0, 0.5, power ? 3 : 0.05, FLAG_NOSHADOW);
-        if (power) lights.push({ pos: [x, 2.9, z], radius: 7, color: [0.8, 0.3, 1], intensity: 5 });
+        glows.box(x, 2.35, z, 1.0, 0.1, 1.0, [0.8, 0.3, 1], -1, power ? 3 : 0.05, FLAG_NOSHADOW);
+        if (power) lights.push({ pos: [x, 2.9, z], radius: 7, color: [0.8, 0.3, 1], intensity: 6 });
       } else if (kind === I.tonic) {
-        glows.box(x, 2.35, z, 0.7, 0.1, 0.7, [0.2, 1, 0.9], 0, 0.5, 2.5, FLAG_NOSHADOW);
+        glows.box(x, 2.35, z, 0.7, 0.1, 0.7, [0.2, 1, 0.9], -1, 2.5, FLAG_NOSHADOW);
+        lights.push({ pos: [x, 2.6, z], radius: 4, color: [0.2, 1, 0.9], intensity: 3 });
       } else if (kind === I.power) {
-        glows.box(x, 1.45, z, 0.2, 0.12, 0.2, power ? [0.2, 1, 0.3] : [1, 0.2, 0.1], 0, 0.5, 3, FLAG_NOSHADOW);
+        glows.box(x, 1.45, z, 0.2, 0.12, 0.2, power ? [0.2, 1, 0.3] : [1, 0.2, 0.1], -1, 4, FLAG_NOSHADOW);
         lights.push({ pos: [x, 1.9, z], radius: 5, color: power ? [0.2, 1, 0.3] : [1, 0.2, 0.1], intensity: 3 });
       } else if (kind === I.part && hdr && !(hdr[H.parts] & (1 << param))) {
         const fuse = param < 8;
-        glows.box(x, y + Math.sin(t * 2 + k) * 0.08, z, fuse ? 0.14 : 0.4, fuse ? 0.34 : 0.4, fuse ? 0.14 : 0.08, fuse ? [1, 0.8, 0.2] : [0.5, 0.7, 0.9], 0.6, 0.3, 1.6, FLAG_NOSHADOW, t * 1.5);
+        glows.box(x, y + Math.sin(t * 2 + k) * 0.08, z, fuse ? 0.14 : 0.4, fuse ? 0.34 : 0.4, fuse ? 0.14 : 0.08, fuse ? [1, 0.8, 0.2] : [0.5, 0.7, 0.9], -1, 1.6, FLAG_NOSHADOW, t * 1.5);
       } else if (kind === I.console) {
-        glows.box(x, 1.25, z, 0.8, 0.08, 0.5, [0.2, 0.9, 1], 0, 0.5, power ? 2 : 0.1, FLAG_NOSHADOW);
+        glows.box(x, 1.25, z, 0.8, 0.08, 0.5, [0.2, 0.9, 1], -1, power ? 2 : 0.1, FLAG_NOSHADOW);
       }
     }
     // Quest relays glow while they can be shot.
     if (hdr && hdr[H.targets] & (1 << 16)) {
       s.mapInfo.targets.forEach((p, k) => {
         if (hdr[H.targets] & (1 << k)) return;
-        glows.box(p[0], p[1], p[2], 0.8, 0.8, 0.8, [1, 0.15, 0.1], 0, 0.5, 3 + Math.sin(t * 6) * 1.5, FLAG_NOSHADOW, t);
+        glows.box(p[0], p[1], p[2], 0.8, 0.8, 0.8, [1, 0.15, 0.1], -1, 3 + Math.sin(t * 6) * 1.5, FLAG_NOSHADOW, t);
         lights.push({ pos: p, radius: 8, color: [1, 0.2, 0.1], intensity: 6 });
       });
     }
@@ -231,59 +469,22 @@ export class Scene {
       compose(tmp, 0, p[0], p[1], p[2], 1, 1, 1, p[3]);
       this.drawModel(groups, `props/${sim.catalog.maps[s.start.map].props[k]}`, tmp.slice(), 0, true);
     });
-    // Barricade boards.
+    // Barricade boards, each one a little crooked.
     s.mapInfo.barricades.forEach((p, k) => {
       const boards = s.snap?.barrs[k] ?? 6;
       const alongX = this.barrAxis[k];
-      for (let i = 0; i < boards; i++) casters.box(p[0], 0.45 + i * 0.36, p[2], alongX ? 2.1 : 0.1, 0.24, alongX ? 0.1 : 2.1, [0.45, 0.3, 0.16], 0, 0.9, 0, 0, 0, 0, alongX ? ((i * 7) % 5 - 2) * 0.03 : 0);
+      for (let i = 0; i < boards; i++) {
+        const tilt = ((i * 7 + k * 3) % 5 - 2) * 0.06;
+        casters.box(p[0], 0.45 + i * 0.36, p[2], alongX ? 2.2 : 0.07, 0.22, alongX ? 0.07 : 2.2, [1, 1, 1], MAT.wood, 0, 0, 0, alongX ? 0 : tilt, alongX ? tilt : 0);
+      }
     });
 
-    // Zombies: six boxes each, animated procedurally.
     for (const z of s.zombies()) {
-      const state = z.rec[Z.state], kind = z.rec[Z.kind];
+      const state = z.rec[Z.state];
       if (state === 5) continue;
-      const turned = state === 4;
-      const c = turned ? ([0.3, 0.5, 0.95] as RGB) : ZOMBIE_COLORS[kind] ?? ZOMBIE_COLORS[0];
-      const rise = state === 0 ? -0.7 : 0;
-      const cy = Math.cos(z.yaw), sy = Math.sin(z.yaw);
-      const stride = Math.sin(t * (3 + kind * 3) + z.id * 1.7);
-      const part = (lx: number, ly: number, lz: number, sx: number, sy_: number, sz: number, color: RGB, pitch = 0, emissive = 0) =>
-        (emissive ? glows : casters).box(z.x + lx * cy + lz * sy, z.y + ly + rise, z.z - lx * sy + lz * cy, sx, sy_, sz, color, 0, 0.9, emissive, emissive ? FLAG_NOSHADOW : 0, z.yaw, pitch);
-      const lean = kind * 0.12;
-      part(0, 1.05, -lean * 0.4, 0.5, 0.62, 0.28, c, -lean, turned ? 0.4 : 0);
-      part(0, 1.55, -lean * 0.8 - 0.02, 0.27, 0.27, 0.27, [c[0] * 1.15, c[1] * 1.15, c[2] * 1.1], -lean);
-      const reach = state === 2 ? 0.5 : 0;
-      part(-0.33, 1.28 + reach * 0.3, -0.3, 0.12, 0.12, 0.6, c, 0.15 + reach + stride * 0.1);
-      part(0.33, 1.28 + reach * 0.3, -0.3, 0.12, 0.12, 0.6, c, 0.15 + reach - stride * 0.1);
-      part(-0.13, 0.4, stride * 0.12, 0.17, 0.8, 0.18, [c[0] * 0.7, c[1] * 0.7, c[2] * 0.7], stride * 0.45);
-      part(0.13, 0.4, -stride * 0.12, 0.17, 0.8, 0.18, [c[0] * 0.7, c[1] * 0.7, c[2] * 0.7], -stride * 0.45);
-      const eye: RGB = turned ? [0.4, 0.8, 1] : [1, 0.75, 0.1];
-      part(-0.07, 1.58, -0.15 - lean * 0.8, 0.05, 0.04, 0.03, eye, 0, 4);
-      part(0.07, 1.58, -0.15 - lean * 0.8, 0.05, 0.04, 0.03, eye, 0, 4);
+      this.zombie(round, glows, z, state, z.rec[Z.kind], t);
     }
-
-    // Other players.
-    for (const p of s.players()) {
-      const life = p.rec[P.life];
-      if (life === 2) continue;
-      const c = PLAYER_COLORS[p.id % PLAYER_COLORS.length];
-      const cy = Math.cos(p.yaw), sy = Math.sin(p.yaw);
-      const low = p.rec[P['ctl.crouched']] ? 0.6 : 0;
-      const at = (lx: number, ly: number, lz: number): [number, number, number] => [p.x + lx * cy + lz * sy, p.y + ly, p.z - lx * sy + lz * cy];
-      if (life === 1) {
-        casters.box(...at(0, 0.25, 0.3), 0.5, 0.3, 1.5, c, 0, 0.8, 0, 0, p.yaw);
-        glows.box(p.x, 1.2 + Math.sin(t * 4) * 0.1, p.z, 0.25, 0.25, 0.25, [0.3, 0.6, 1], 0, 0.5, 3, FLAG_NOSHADOW, t * 2);
-        continue;
-      }
-      casters.box(...at(0, 1.1 - low, 0), 0.5, 0.65, 0.3, c, 0.1, 0.7, 0, 0, p.yaw);
-      casters.box(...at(0, 1.62 - low, 0), 0.26, 0.26, 0.26, [0.85, 0.7, 0.6], 0, 0.8, 0, 0, p.yaw, p.rec[P['ctl.pitch']]);
-      casters.box(...at(-0.13, 0.4 - low * 0.4, 0), 0.18, 0.8 - low, 0.2, [c[0] * 0.5, c[1] * 0.5, c[2] * 0.5], 0, 0.8, 0, 0, p.yaw);
-      casters.box(...at(0.13, 0.4 - low * 0.4, 0), 0.18, 0.8 - low, 0.2, [c[0] * 0.5, c[1] * 0.5, c[2] * 0.5], 0, 0.8, 0, 0, p.yaw);
-      const gun = p.rec[P[`arms.guns${p.rec[P['arms.cur']]}.id`]];
-      compose(tmp, 0, ...at(0.2, 1.25 - low, -0.35), 1, 1, 1, p.yaw, p.rec[P['ctl.pitch']]);
-      this.drawModel(groups, `weapons/${sim.catalog.weapons[gun]?.slug}`, tmp.slice(), 0, true);
-      if (p.rec[P.shield] > 0) casters.box(...at(0, 1.1 - low, 0.22), 0.55, 0.75, 0.06, [0.5, 0.55, 0.6], 0.9, 0.3, 0, 0, p.yaw);
-    }
+    for (const p of s.players()) if (p.rec[P.life] !== 2) this.survivor(round, glows, groups, p, t);
 
     // Power-ups, grenades and lingering effects.
     for (const e of s.snap?.ents ?? []) {
@@ -291,16 +492,16 @@ export class Scene {
       if (kind >= 10 && kind < 15) {
         const c = POWERUP_COLORS[kind - 10];
         const blink = e[E.a] < 6 && Math.sin(t * 14) > 0 ? 0.3 : 1;
-        glows.box(x, y + Math.sin(t * 2.5) * 0.1, z, 0.4, 0.4, 0.4, c, 0, 0.3, 3.5 * blink, FLAG_NOSHADOW, t * 2, 0.6);
+        glows.box(x, y + Math.sin(t * 2.5) * 0.1, z, 0.4, 0.4, 0.4, c, -1, 3.5 * blink, FLAG_NOSHADOW, t * 2, 0.6);
         lights.push({ pos: [x, y, z], radius: 6, color: c, intensity: 4 * blink });
       } else if (kind < 4) {
-        casters.box(x, y, z, 0.12, 0.12, 0.12, kind === 3 ? [0.3, 0.5, 0.9] : [0.15, 0.2, 0.12], 0.5, 0.5, 0, 0, t * 9, t * 7);
+        round.box(x, y, z, 0.1, 0.13, 0.1, kind === 3 ? [0.6, 0.8, 1.2] : [0.8, 1, 0.7], MAT.painted, 0, 0, t * 9, t * 7);
       } else if (kind === 20 || kind === 21) {
         const c: RGB = kind === 20 ? [1, 0.45, 0.1] : [0.6, 0.8, 1];
-        for (let i = 0; i < 6; i++) glows.box(x + Math.cos(t * 3 + i) * 1.4, y + 0.3 + ((t * 2 + i * 0.4) % 1.5), z + Math.sin(t * 3 + i) * 1.4, 0.18, 0.18, 0.18, c, 0, 0.5, 4, FLAG_NOSHADOW, t + i);
+        for (let i = 0; i < 6; i++) glows.box(x + Math.cos(t * 3 + i) * 1.4, y + 0.3 + ((t * 2 + i * 0.4) % 1.5), z + Math.sin(t * 3 + i) * 1.4, 0.18, 0.18, 0.18, c, -1, 4, FLAG_NOSHADOW, t + i);
         lights.push({ pos: [x, y + 1, z], radius: 8, color: c, intensity: 7 });
       } else if (kind === 30) {
-        glows.box(x, 0.05, z, 1.2, 0.05, 1.2, [1, 0.2, 0.1], 0, 0.5, 3 + Math.sin(t * 20) * 2, FLAG_NOSHADOW, t * 3);
+        glows.box(x, 0.05, z, 1.2, 0.05, 1.2, [1, 0.2, 0.1], -1, 3 + Math.sin(t * 20) * 2, FLAG_NOSHADOW, t * 3);
       }
     }
 
@@ -308,14 +509,14 @@ export class Scene {
     for (const tr of this.tracers) {
       const d = [tr.b[0] - tr.a[0], tr.b[1] - tr.a[1], tr.b[2] - tr.a[2]];
       const len = Math.hypot(d[0], d[1], d[2]) || 1;
-      glows.box((tr.a[0] + tr.b[0]) / 2, (tr.a[1] + tr.b[1]) / 2, (tr.a[2] + tr.b[2]) / 2, 0.025, 0.025, len, tr.color, 0, 0.5, 6, FLAG_NOSHADOW, Math.atan2(-d[0], -d[2]), Math.asin(d[1] / len));
+      glows.box((tr.a[0] + tr.b[0]) / 2, (tr.a[1] + tr.b[1]) / 2, (tr.a[2] + tr.b[2]) / 2, 0.018, 0.018, len, tr.color, -1, 7, FLAG_NOSHADOW, Math.atan2(-d[0], -d[2]), Math.asin(d[1] / len));
       tr.t -= dt;
     }
     this.tracers = this.tracers.filter(tr => tr.t > 0);
     for (const f of this.flashes) {
       const k = f.t / f.life;
       const size = f.size * (1.6 - k);
-      glows.box(f.pos[0], f.pos[1], f.pos[2], size, size, size, f.color, 0, 0.5, 6 * k, FLAG_NOSHADOW, t * 5, t * 3);
+      (f.radius ? glows : round).box(f.pos[0], f.pos[1], f.pos[2], size, size, size, f.color, -1, f.radius ? 6 * k : 0.6 * k, FLAG_NOSHADOW, t * 5, t * 3);
       if (f.radius) lights.push({ pos: f.pos, radius: f.radius, color: f.color, intensity: 25 * k });
       f.t -= dt;
     }
@@ -330,12 +531,13 @@ export class Scene {
     const ads = me[P['arms.ads']] ?? 0;
     const stats = gunId >= 0 ? sim.gunStats(gunId, me[P[`arms.guns${cur}.att`]], me[P[`arms.guns${cur}.tier`]]) : null;
     const zoom = 1 + ((stats?.zoom ?? 1) - 1) * ads;
-    const fov = (2 * Math.atan(Math.tan((view.fov * Math.PI) / 360) / zoom));
+    const fov = 2 * Math.atan(Math.tan((view.fov * Math.PI) / 360) / zoom);
     const viewProj = mul(mat4(), perspective(mat4(), fov, aspect, 0.08, 400), viewMat);
     const viewmodelProj = mul(mat4(), perspective(mat4(), (54 * Math.PI) / 180 / (1 + (zoom - 1) * 0.25), aspect, 0.02, 20), viewMat);
 
-    // First-person weapon: sway lags the look, bob follows the stride, kick decays after each shot.
+    // First-person weapon and arms: sway lags the look, bob follows the stride, kick decays after each shot.
     const alive = me[P.life] === 0;
+    const vm = new Batch();
     if (alive && gunId >= 0) {
       const dyaw = view.yaw - this.lastAngles[0], dpitch = view.pitch - this.lastAngles[1];
       this.sway[0] += (Math.max(-0.06, Math.min(0.06, dyaw * 0.6)) - this.sway[0]) * Math.min(1, dt * 10);
@@ -357,21 +559,39 @@ export class Scene {
         this.sway[0] * -2 + (me[P['arms.melee_t']] > 0.3 ? 0.9 : 0));
       const world = mul(mat4(), camWorld, local);
       const slug = sim.catalog.weapons[gunId]?.slug;
-      this.drawModel(groups, `weapons/${slug}`, world, FLAG_VIEWMODEL | FLAG_NOSHADOW, false);
+      const model = this.drawModel(groups, `weapons/${slug}`, world, FLAG_VIEWMODEL | FLAG_NOSHADOW, false);
+      // Arms: sleeves from below the screen edge to gloved hands on the grip and the handguard.
+      const cam = (x: number, y: number, z: number) => transformPoint(camWorld, [x, y, z]) as V3;
+      const grip = transformPoint(world, [0, -0.035, 0.015]) as V3;
+      const fore = transformPoint(world, [0, -0.005, Math.max(-0.3, (model?.min[2] ?? -0.35) * 0.62)]) as V3;
+      const sleeve: RGB = [1.4, 1.5, 1.25];
+      const vf = FLAG_VIEWMODEL | FLAG_NOSHADOW;
+      // Only forearms are visible: they enter from below the screen edge, like a real first-person view.
+      const rElbow = cam(0.24 - ads * 0.1, -0.42, -0.2), lElbow = cam(-0.1 + ads * 0.04, -0.4, -0.32);
+      vm.limb(rElbow, grip, 0.034, sleeve, MAT.fabric, vf);
+      vm.limb(lElbow, fore, 0.032, sleeve, MAT.fabric, vf);
+      // Gloved hands wrapped around the grip and the handguard.
+      for (const [h, from] of [[grip, rElbow], [fore, lElbow]] as const) {
+        const d = [h[0] - from[0], h[1] - from[1], h[2] - from[2]], l = Math.hypot(d[0], d[1], d[2]) || 1;
+        vm.limb([h[0] - d[0] / l * 0.04, h[1] - d[1] / l * 0.04, h[2] - d[2] / l * 0.04], [h[0] + d[0] / l * 0.03, h[1] + d[1] / l * 0.03, h[2] + d[2] / l * 0.03], 0.03, [0.8, 0.8, 0.8], MAT.polymer, vf, 0.036);
+      }
       if (this.muzzle > 0) {
         this.muzzle -= dt;
-        const model = this.models.get(`weapons/${slug}`);
         const tip = mat4();
-        compose(tip, 0, 0, 0.06, (model?.min[2] ?? -0.6) - 0.06, 0.09, 0.09, 0.14, 0, 0, t * 40);
-        glows.mat(mul(mat4(), world, tip), [1, 0.8, 0.4], 0, 0.5, 9, FLAG_VIEWMODEL | FLAG_NOSHADOW);
+        compose(tip, 0, 0, 0.035, (model?.min[2] ?? -0.6) - 0.05, 0.08, 0.08, 0.13, 0, 0, t * 40);
+        glows.mat(mul(mat4(), world, tip), [1, 0.75, 0.4], -1, 0, 0.5, 9, vf);
         // The flash lights the world for a couple of frames.
-        lights.push({ pos: [view.pos[0] - Math.sin(view.yaw) * 0.8, view.pos[1] - 0.1, view.pos[2] - Math.cos(view.yaw) * 0.8], radius: 11, color: [1, 0.75, 0.4], intensity: 30 });
+        lights.push({ pos: [view.pos[0] - Math.sin(view.yaw) * 0.8, view.pos[1] - 0.1, view.pos[2] - Math.cos(view.yaw) * 0.8], radius: 11, color: [1, 0.7, 0.35], intensity: 30 });
       }
     }
     this.lastAngles = [view.yaw, view.pitch];
 
-    // Nearest lights win the 16 slots.
-    for (const l of this.staticLights) lights.push(l);
+    // Nearest lights win the 16 slots. Some lamps flicker.
+    for (const l of this.staticLights) {
+      if (l.flicker === undefined) { lights.push(l); continue; }
+      const f = Math.sin(t * 23 + l.flicker) * Math.sin(t * 7.3 + l.flicker * 2) > 0.55 ? 0.15 : 1;
+      lights.push({ ...l, intensity: l.intensity * f });
+    }
     const d2 = (l: LightSrc) => (l.pos[0] - view.pos[0]) ** 2 + (l.pos[1] - view.pos[1]) ** 2 + (l.pos[2] - view.pos[2]) ** 2;
     lights.sort((a, c) => d2(a) - d2(c));
     const lightCount = Math.min(lights.length, MAX_LIGHTS);
@@ -389,21 +609,23 @@ export class Scene {
     const shadowView = lookAt(mat4(), [cx + sunDir[0] * 70, sunDir[1] * 70, cz + sunDir[2] * 70], [cx, 0, cz], [0, 1, 0]);
     const shadowViewProj = mul(mat4(), ortho(mat4(), -R, R, -R, R, 1, 160), shadowView);
 
-    // Assemble the instance buffer: shadow casters first, then everything that casts none.
+    // Assemble the instance buffer. Cube casters, sphere casters, then everything without shadows.
     const out = this.frameData;
     out.n = 0;
-    out.append(this.world);
-    out.append(casters);
-    const casterCount = out.n;
-    out.append(glows);
-    const draws: Draw[] = [
-      { mesh: this.cube, first: 0, count: casterCount, shadow: true },
-      { mesh: this.cube, first: casterCount, count: out.n - casterCount, shadow: false },
-    ];
-    for (const g of groups.values()) {
-      draws.push({ mesh: g.mesh, first: out.n, count: g.batch.n, shadow: g.shadow });
-      out.append(g.batch);
-    }
+    const draws: Draw[] = [];
+    const add = (mesh: number, batch: Batch, shadow: boolean) => {
+      if (!batch.n) return;
+      draws.push({ mesh, first: out.n, count: batch.n, shadow });
+      out.append(batch);
+    };
+    add(this.cube, this.world, true);
+    add(this.cube, casters, true);
+    add(this.cylinder, this.worldRound, true);
+    add(this.sphere, round, true);
+    add(this.cube, this.worldGlow, false);
+    add(this.cube, glows, false);
+    add(this.sphere, vm, false);
+    for (const g of groups.values()) add(g.mesh, g.batch, g.shadow);
 
     this.hurt = Math.max(0, this.hurt - dt * 1.5);
     const health = me[P.max_health] ? me[P.health] / me[P.max_health] : 1;
@@ -429,12 +651,15 @@ export class Scene {
       draws,
       post: {
         exposure: 1.0,
-        bloom: 0.55,
+        bloom: 0.5,
         motionBlur: settings.motionBlur ? 0.5 + Math.min(speed / 12, 1) * 0.4 : 0,
         dofFocus: downed ? 1.5 : 30,
         dofAmount: settings.dof ? (downed ? 0.9 : ads * 0.45) : 0,
-        vignette: 0.35 + (1 - Math.max(health, 0)) * 0.35,
+        vignette: 0.4 + (1 - Math.max(health, 0)) * 0.35,
         damage: Math.max(this.hurt * 0.6, downed ? 0.45 : (1 - health) * 0.5),
+        grain: 0.045,
+        saturation: downed ? 0.35 : 0.86,
+        contrast: 0.35,
         time: t,
       },
     };

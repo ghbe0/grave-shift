@@ -84,7 +84,7 @@ async function shoot(page, file) {
 }
 
 await check('site loads under the Pages sub-path with no errors or 404s', async () => {
-  const page = await openPage('', 'main');
+  const page = await openPage('?low', 'main');
   const title = await page.title();
   const info = await page.textContent('#renderer-info');
   // A missing asset only shows up once a match loads models, so start one briefly.
@@ -98,7 +98,7 @@ await check('site loads under the Pages sub-path with no errors or 404s', async 
 });
 
 await check('solo survival on WebGL2: round starts and zombies spawn', async () => {
-  const page = await openPage('?renderer=webgl2', 'webgl2');
+  const page = await openPage('?renderer=webgl2&low', 'webgl2');
   await page.evaluate(() => document.getElementById('btn-solo').click());
   await engage(page);
   await waitRound(page);
@@ -112,7 +112,7 @@ await check('solo survival on WebGL2: round starts and zombies spawn', async () 
 });
 
 await check('solo survival on WebGPU (software adapter)', async () => {
-  const page = await openPage('?renderer=webgpu&offscreen', 'webgpu');
+  const page = await openPage('?renderer=webgpu&offscreen&low', 'webgpu');
   await page.evaluate(() => document.getElementById('btn-solo').click());
   await engage(page);
   await waitRound(page);

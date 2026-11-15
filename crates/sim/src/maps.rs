@@ -129,10 +129,11 @@ pub static MAPS: [MapDef; 2] = [
             },
         ],
         props: &[("generator", 28.0, 16.0, 0.0, 0.0)],
-        sun: [-0.45, 0.8, 0.35],
-        sun_color: [1.0, 0.86, 0.68],
-        sky: [0.32, 0.4, 0.55],
-        fog: 0.012,
+        // Dusk: low warm sun, long shadows, hazy horizon.
+        sun: [-0.62, 0.34, 0.5],
+        sun_color: [1.0, 0.58, 0.32],
+        sky: [0.34, 0.31, 0.33],
+        fog: 0.016,
     },
     MapDef {
         name: "Dry Dock",
@@ -166,10 +167,11 @@ pub static MAPS: [MapDef; 2] = [
             reward: Reward::Points(2000),
         }],
         props: &[],
-        sun: [0.5, 0.7, -0.4],
-        sun_color: [0.8, 0.88, 1.0],
-        sky: [0.2, 0.28, 0.42],
-        fog: 0.016,
+        // Night under a cold moon; the lamps do most of the lighting.
+        sun: [0.45, 0.55, -0.5],
+        sun_color: [0.36, 0.44, 0.62],
+        sky: [0.09, 0.11, 0.16],
+        fog: 0.024,
     },
 ];
 

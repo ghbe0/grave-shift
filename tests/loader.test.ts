@@ -6,13 +6,16 @@ describe('glTF loader', () => {
   it('parses a generated .glb with an embedded texture', () => {
     const { json, bin } = parseGlb(new Uint8Array(readFileSync('public/assets/weapons/kestrel.glb')));
     const model = parseGltf(json, [bin]);
-    expect(model.parts.length).toBe(3);
-    const part = model.parts[0];
-    expect(part.data.vertices.length % 8).toBe(0);
-    expect(part.data.indices.length % 3).toBe(0);
-    expect(Math.max(...part.data.indices)).toBeLessThan(part.data.vertices.length / 8);
-    expect(part.metallic).toBeCloseTo(0.9);
-    expect(part.image).toBe(0);
+    expect(model.parts.length).toBe(5);
+    for (const part of model.parts) {
+      expect(part.data.vertices.length % 8).toBe(0);
+      expect(part.data.indices.length % 3).toBe(0);
+      expect(Math.max(...part.data.indices)).toBeLessThan(part.data.vertices.length / 8);
+    }
+    // Named materials map to the procedural layers: gun metal and polymer.
+    expect(model.parts.map(p => p.layer)).toEqual([6, 9, 2, -1, -1]);
+    // The plain dark material keeps the embedded texture.
+    expect(model.parts[3].image).toBe(0);
     // PNG signature of the embedded image
     expect(Array.from(model.images[0].bytes.subarray(0, 4))).toEqual([137, 80, 78, 71]);
     // The gun points down -Z and is longer than it is wide.
@@ -41,5 +44,6 @@ describe('glTF loader', () => {
     expect(model.parts[0].emissive).toBe(2);
     expect(model.parts[0].metallic).toBe(1);
     expect(model.parts[0].image).toBe(-1);
+    expect(model.parts[0].layer).toBe(-1);
   });
 });

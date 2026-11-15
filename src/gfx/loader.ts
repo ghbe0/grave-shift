@@ -7,6 +7,8 @@ import { VERTEX_FLOATS, type MeshData, type Renderer } from './renderer';
 
 export interface ModelPart {
   mesh: number;
+  /** Procedural material layer to use instead of the mesh texture (material named "layer:N"), or -1. */
+  layer: number;
   color: [number, number, number, number];
   metallic: number;
   roughness: number;
@@ -16,6 +18,8 @@ export interface Model { parts: ModelPart[]; min: number[]; max: number[] }
 
 /** A primitive baked into model space, before upload. Exposed for tests and tools. */
 export interface ParsedPart extends Omit<ModelPart, 'mesh'> { data: MeshData; image: number }
+
+const layerOf = (name: unknown) => { const m = /^layer:(\d+)$/.exec(String(name ?? '')); return m ? +m[1] : -1; };
 export interface ParsedModel { parts: ParsedPart[]; images: { bytes: Uint8Array; mime: string }[]; min: number[]; max: number[] }
 
 const GLB_MAGIC = 0x46546c67;
@@ -121,6 +125,7 @@ export function parseGltf(json: any, buffers: Uint8Array[]): ParsedModel {
         parts.push({
           data: { vertices: v, indices: count > 65535 ? Uint32Array.from(indices) : Uint16Array.from(indices) },
           image: tex,
+          layer: layerOf(mat.name),
           color: pbr.baseColorFactor ?? [1, 1, 1, 1],
           metallic: pbr.metallicFactor ?? 1,
           roughness: pbr.roughnessFactor ?? 1,
@@ -177,7 +182,8 @@ export async function loadModel(renderer: Renderer, url: string): Promise<Model>
     min: parsed.min,
     max: parsed.max,
     parts: parsed.parts.map(p => ({
-      mesh: renderer.createMesh({ ...p.data, texture: p.image >= 0 ? bitmaps[p.image] : null }),
+      mesh: renderer.createMesh({ ...p.data, texture: p.image >= 0 && p.layer < 0 ? bitmaps[p.image] : null }),
+      layer: p.layer,
       color: p.color, metallic: p.metallic, roughness: p.roughness, emissive: p.emissive,
     })),
   };

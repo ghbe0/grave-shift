@@ -1,5 +1,6 @@
-// WebGPU backend: shadow pass -> HDR forward PBR pass -> bloom chain -> composite to the canvas.
-import { INSTANCE_FLOATS, LIGHT_FLOATS, MAX_LIGHTS, VERTEX_FLOATS, VIEWMODEL_DEPTH, type Frame, type MeshData, type Quality, type Renderer } from './renderer';
+// WebGPU backend: shadow pass -> 4x MSAA HDR forward PBR pass -> bloom chain -> composite (sky,
+// motion blur, depth of field, tone map, grade, grain) to the canvas.
+import { flatMaterial, INSTANCE_FLOATS, LIGHT_FLOATS, MAT_LAYERS, MAT_MIPS, MAT_SIZE, matOffset, MAX_LIGHTS, VERTEX_FLOATS, VIEWMODEL_DEPTH, type Frame, type MeshData, type Quality, type Renderer } from './renderer';
 import postSrc from './shaders/post.wgsl?raw';
 import sceneSrc from './shaders/scene.wgsl?raw';
 
@@ -7,14 +8,16 @@ interface GpuMesh { vertices: GPUBuffer; indices: GPUBuffer; count: number; form
 
 const HDR: GPUTextureFormat = 'rgba16float';
 const DEPTH: GPUTextureFormat = 'depth32float';
-const GLOBALS_FLOATS = 16 * 3 + 4 * 5 + MAX_LIGHTS * LIGHT_FLOATS;
-const POST_FLOATS = 16 * 2 + 4 * 4;
-const BLOOM_LEVELS = 3;
+const SAMPLES = 4;
+const GLOBALS_FLOATS = 16 * 3 + 4 * 5 + 12 + MAX_LIGHTS * LIGHT_FLOATS;
+const POST_FLOATS = 16 * 2 + 4 * 7;
+const BLOOM_LEVELS = 4;
 
 export class WebGPURenderer implements Renderer {
   readonly kind = 'webgpu' as const;
   private meshes: GpuMesh[] = [];
   private globals = new Float32Array(GLOBALS_FLOATS);
+  private tiles = new Float32Array(12).fill(2);
   private postData = new Float32Array(POST_FLOATS);
   private globalsBuf: GPUBuffer;
   private postBuf: GPUBuffer;
@@ -34,11 +37,16 @@ export class WebGPURenderer implements Renderer {
   private linear: GPUSampler;
   private repeat: GPUSampler;
   private white: GPUTexture;
+  private matSurface: GPUTexture;
+  private matDetail: GPUTexture;
+  private hdrMs!: GPUTexture;
   private hdr!: GPUTexture;
   private depth!: GPUTexture;
+  private offscreen: GPUTexture | null = null;
   private bloom: GPUTexture[] = [];
   private captureNext: ((img: ImageData) => void) | null = null;
-  private offscreen: GPUTexture | null = null;
+  /** Offscreen only: a frame is still executing on the GPU. */
+  private busy = false;
   private postBinds: { bright: GPUBindGroup; down: GPUBindGroup[]; up: GPUBindGroup[]; composite: GPUBindGroup } | null = null;
 
   static async create(canvas: HTMLCanvasElement, quality: Quality): Promise<WebGPURenderer> {
@@ -69,9 +77,15 @@ export class WebGPURenderer implements Renderer {
     this.postBuf = d.createBuffer({ size: POST_FLOATS * 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.instanceBuf = this.makeInstanceBuffer();
     this.linear = d.createSampler({ magFilter: 'linear', minFilter: 'linear' });
-    this.repeat = d.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'repeat', addressModeV: 'repeat' });
+    this.repeat = d.createSampler({ magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear', addressModeU: 'repeat', addressModeV: 'repeat', maxAnisotropy: 8 });
     this.white = d.createTexture({ size: [1, 1], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
     d.queue.writeTexture({ texture: this.white }, new Uint8Array([255, 255, 255, 255]), {}, [1, 1]);
+
+    const matTex = (format: GPUTextureFormat) => d.createTexture({ size: [MAT_SIZE, MAT_SIZE, MAT_LAYERS], format, mipLevelCount: MAT_MIPS, usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    this.matSurface = matTex('rgba8unorm-srgb');
+    this.matDetail = matTex('rgba8unorm');
+    const flat = flatMaterial();
+    for (let layer = 0; layer < MAT_LAYERS; layer++) this.uploadLayer(layer, flat);
 
     const shadowTex = d.createTexture({ size: [quality.shadowSize, quality.shadowSize], format: DEPTH, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
     this.shadowView = shadowTex.createView();
@@ -83,6 +97,9 @@ export class WebGPURenderer implements Renderer {
         uniform,
         { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'depth' } },
         { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'comparison' } },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { viewDimension: '2d-array' } },
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { viewDimension: '2d-array' } },
+        { binding: 5, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
       ],
     });
     this.texLayout = d.createBindGroupLayout({
@@ -96,7 +113,7 @@ export class WebGPURenderer implements Renderer {
         { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: {} },
         { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: {} },
         { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
-        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'depth' } },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'depth', multisampled: true } },
         { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: {} },
       ],
     });
@@ -107,6 +124,9 @@ export class WebGPURenderer implements Renderer {
         { binding: 0, resource: { buffer: this.globalsBuf } },
         { binding: 1, resource: this.shadowView },
         { binding: 2, resource: d.createSampler({ compare: 'less', magFilter: 'linear', minFilter: 'linear' }) },
+        { binding: 3, resource: this.matSurface.createView({ dimension: '2d-array' }) },
+        { binding: 4, resource: this.matDetail.createView({ dimension: '2d-array' }) },
+        { binding: 5, resource: this.repeat },
       ],
     });
 
@@ -130,6 +150,7 @@ export class WebGPURenderer implements Renderer {
       fragment: { module: scene, entryPoint: 'fs', targets: [{ format: HDR }] },
       primitive: { cullMode: 'back' },
       depthStencil: { format: DEPTH, depthWriteEnabled: true, depthCompare: 'less' },
+      multisample: { count: SAMPLES },
     });
     this.shadowPipe = d.createRenderPipeline({
       layout: d.createPipelineLayout({ bindGroupLayouts: [shadowLayout] }),
@@ -149,6 +170,22 @@ export class WebGPURenderer implements Renderer {
 
   private makeInstanceBuffer(): GPUBuffer {
     return this.device.createBuffer({ size: this.instanceCap * INSTANCE_FLOATS * 4, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+  }
+
+  private uploadLayer(layer: number, data: Uint8Array): void {
+    for (const [map, tex] of [[0, this.matSurface], [1, this.matDetail]] as const) {
+      for (let level = 0; level < MAT_MIPS; level++) {
+        const s = MAT_SIZE >> level;
+        const off = matOffset(map, level);
+        this.device.queue.writeTexture({ texture: tex, mipLevel: level, origin: [0, 0, layer] }, data.subarray(off, off + s * s * 4) as Uint8Array<ArrayBuffer>, { bytesPerRow: s * 4, rowsPerImage: s }, [s, s, 1]);
+      }
+    }
+  }
+
+  setMaterial(layer: number, data: Uint8Array, tile: number): void {
+    if (layer < 0 || layer >= MAT_LAYERS || data.length < matOffset(1, 0) * 2) return;
+    this.uploadLayer(layer, data);
+    this.tiles[layer] = tile;
   }
 
   createMesh(data: MeshData): number {
@@ -178,12 +215,13 @@ export class WebGPURenderer implements Renderer {
   resize(width: number, height: number): void {
     const d = this.device;
     const [w, h] = [Math.max(1, width), Math.max(1, height)];
-    for (const t of [this.hdr, this.depth, this.offscreen, ...this.bloom]) t?.destroy();
-    if (!this.context) this.offscreen = d.createTexture({ size: [w, h], format: this.format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
-    const target = (tw: number, th: number, format: GPUTextureFormat) =>
-      d.createTexture({ size: [Math.max(1, tw), Math.max(1, th)], format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+    for (const t of [this.hdrMs, this.hdr, this.depth, this.offscreen, ...this.bloom]) t?.destroy();
+    const target = (tw: number, th: number, format: GPUTextureFormat, sampleCount = 1) =>
+      d.createTexture({ size: [Math.max(1, tw), Math.max(1, th)], format, sampleCount, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+    this.hdrMs = target(w, h, HDR, SAMPLES);
     this.hdr = target(w, h, HDR);
-    this.depth = target(w, h, DEPTH);
+    this.depth = target(w, h, DEPTH, SAMPLES);
+    if (!this.context) this.offscreen = d.createTexture({ size: [w, h], format: this.format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
     this.bloom = Array.from({ length: BLOOM_LEVELS }, (_, i) => target(w >> (i + 1), h >> (i + 1), HDR));
     const depthView = this.depth.createView();
     const dummy = this.white.createView();
@@ -207,14 +245,18 @@ export class WebGPURenderer implements Renderer {
   }
 
   render(f: Frame): void {
+    // A canvas is throttled by presentation; offscreen rendering is not, so without this the queue
+    // would grow without bound on a slow (software) adapter.
+    if (this.busy) return;
     const d = this.device;
     const g = this.globals;
     g.set(f.viewProj, 0);
     g.set(f.viewmodelProj, 16);
     g.set(f.shadowViewProj, 32);
-    g.set([f.camPos[0], f.camPos[1], f.camPos[2], 1, f.sunDir[0], f.sunDir[1], f.sunDir[2], 0, f.sunColor[0], f.sunColor[1], f.sunColor[2], 3.2, f.sky[0], f.sky[1], f.sky[2], f.fog,
+    g.set([f.camPos[0], f.camPos[1], f.camPos[2], 1, f.sunDir[0], f.sunDir[1], f.sunDir[2], 0, f.sunColor[0], f.sunColor[1], f.sunColor[2], 3.0, f.sky[0], f.sky[1], f.sky[2], f.fog,
       Math.min(f.lightCount, MAX_LIGHTS), f.post.time, 1 / this.quality.shadowSize, VIEWMODEL_DEPTH], 48);
-    g.set(f.lights.subarray(0, MAX_LIGHTS * LIGHT_FLOATS), 68);
+    g.set(this.tiles, 68);
+    g.set(f.lights.subarray(0, MAX_LIGHTS * LIGHT_FLOATS), 80);
     d.queue.writeBuffer(this.globalsBuf, 0, g);
 
     if (f.instanceCount > this.instanceCap) {
@@ -228,8 +270,11 @@ export class WebGPURenderer implements Renderer {
     p.set(f.invViewProj, 0);
     p.set(f.prevViewProj, 16);
     const post = this.quality.post;
-    p.set([f.camPos[0], f.camPos[1], f.camPos[2], 1, f.post.exposure, post ? f.post.bloom : 0, post ? f.post.motionBlur : 0, f.post.dofFocus,
-      post ? f.post.dofAmount : 0, f.post.vignette, f.post.damage, f.post.time, VIEWMODEL_DEPTH, 0, 0, 0], 32);
+    p.set([f.camPos[0], f.camPos[1], f.camPos[2], 1,
+      f.post.exposure, post ? f.post.bloom : 0, post ? f.post.motionBlur : 0, f.post.dofFocus,
+      post ? f.post.dofAmount : 0, f.post.vignette, f.post.damage, f.post.time,
+      VIEWMODEL_DEPTH, post ? f.post.grain : 0, f.post.saturation, f.post.contrast,
+      f.sunDir[0], f.sunDir[1], f.sunDir[2], 0, f.sunColor[0], f.sunColor[1], f.sunColor[2], 1, f.sky[0], f.sky[1], f.sky[2], 1], 32);
     d.queue.writeBuffer(this.postBuf, 0, p);
 
     const enc = d.createCommandEncoder();
@@ -253,7 +298,7 @@ export class WebGPURenderer implements Renderer {
     drawAll(shadow, true);
 
     const main = enc.beginRenderPass({
-      colorAttachments: [{ view: this.hdr.createView(), clearValue: { r: f.sky[0], g: f.sky[1], b: f.sky[2], a: 1 }, loadOp: 'clear', storeOp: 'store' }],
+      colorAttachments: [{ view: this.hdrMs.createView(), resolveTarget: this.hdr.createView(), clearValue: { r: f.sky[0], g: f.sky[1], b: f.sky[2], a: 1 }, loadOp: 'clear', storeOp: 'discard' }],
       depthStencilAttachment: { view: this.depth.createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' },
     });
     main.setPipeline(this.scenePipe);
@@ -284,6 +329,10 @@ export class WebGPURenderer implements Renderer {
       enc.copyTextureToBuffer({ texture: out }, { buffer: readback, bytesPerRow }, [out.width, out.height]);
     }
     d.queue.submit([enc.finish()]);
+    if (!this.context) {
+      this.busy = true;
+      void d.queue.onSubmittedWorkDone().then(() => (this.busy = false));
+    }
     if (resolve && readback) {
       const [w, h, bgra] = [out.width, out.height, out.format.startsWith('bgra')];
       void readback.mapAsync(GPUMapMode.READ).then(() => {

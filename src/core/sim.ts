@@ -136,6 +136,13 @@ export class Sim {
     const io = this.io;
     return { mag: io[0], zoom: io[1], auto: io[2] > 0, flags: io[3], reserve: io[4] };
   }
+  /** One procedural material layer: surface then detail RGBA8 mip chains (see texgen.rs). */
+  texgen(layer: number, size: number): Uint8Array {
+    const ptr = this.x.gs_texgen(layer, size);
+    return new Uint8Array(this.x.memory.buffer, ptr, this.x.gs_texgen_len()).slice();
+  }
+  get materialLayers(): number { return this.x.gs_texgen_layers(); }
+  materialTile(layer: number): number { return this.x.gs_texgen_tile(layer); }
   zombieHealth(round: number): number { return this.x.gs_zombie_health(round); }
   zombieCount(round: number, players: number): number { return this.x.gs_zombie_count(round, players); }
   hordeCap(players: number): number { return this.x.gs_horde_cap(players); }

@@ -10,6 +10,7 @@ pub mod loadout;
 pub mod maps;
 pub mod math;
 pub mod survival;
+pub mod texgen;
 pub mod util;
 pub mod world;
 
@@ -23,6 +24,7 @@ static mut STR: [u8; STR_LEN] = [0; STR_LEN];
 
 thread_local! {
     static GAMES: RefCell<Vec<Option<Game>>> = const { RefCell::new(Vec::new()) };
+    static TEX: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
 fn io() -> &'static mut [f32] {
@@ -352,4 +354,30 @@ pub extern "C" fn gs_zombie_count(round: u32, players: u32) -> u32 {
 #[no_mangle]
 pub extern "C" fn gs_horde_cap(players: u32) -> u32 {
     survival::horde_cap(players)
+}
+
+/// Generates material layer `layer` at `size` (a power of two). Returns a pointer to the bytes
+/// (surface mip chain then detail mip chain, RGBA8); `gs_texgen_len` gives the length. The buffer
+/// is reused by the next call.
+#[no_mangle]
+pub extern "C" fn gs_texgen(layer: u32, size: u32) -> *const u8 {
+    TEX.with(|t| {
+        let mut t = t.borrow_mut();
+        t.clear();
+        texgen::generate(layer as usize % texgen::LAYERS, (size as usize).clamp(4, 2048).next_power_of_two(), &mut t);
+        t.as_ptr()
+    })
+}
+#[no_mangle]
+pub extern "C" fn gs_texgen_len() -> u32 {
+    TEX.with(|t| t.borrow().len() as u32)
+}
+#[no_mangle]
+pub extern "C" fn gs_texgen_layers() -> u32 {
+    texgen::LAYERS as u32
+}
+/// Metres covered by one repeat of a material layer.
+#[no_mangle]
+pub extern "C" fn gs_texgen_tile(layer: u32) -> f32 {
+    texgen::TILE.get(layer as usize).copied().unwrap_or(1.0)
 }

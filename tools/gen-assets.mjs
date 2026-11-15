@@ -32,39 +32,69 @@ const texture = png(32, 32, (x, y) => {
 
 const FACES = [[[1, 0, 0], [0, 0, -1], [0, 1, 0]], [[-1, 0, 0], [0, 0, 1], [0, 1, 0]], [[0, 1, 0], [1, 0, 0], [0, 0, -1]], [[0, -1, 0], [1, 0, 0], [0, 0, 1]], [[0, 0, 1], [1, 0, 0], [0, 1, 0]], [[0, 0, -1], [-1, 0, 0], [0, 1, 0]]];
 
-/** boxes: [{ c: [x, y, z], s: [w, h, d], m: materialIndex }], materials: [{ color, metallic, roughness, emissive? }] */
-function glb(boxes, materials) {
+/** Rotates a point/normal about the X axis (pitch) then Y (yaw). */
+const rot = (p, rx = 0, ry = 0) => {
+  const [x, y, z] = p;
+  const y1 = y * Math.cos(rx) - z * Math.sin(rx), z1 = y * Math.sin(rx) + z * Math.cos(rx);
+  return [x * Math.cos(ry) + z1 * Math.sin(ry), y1, -x * Math.sin(ry) + z1 * Math.cos(ry)];
+};
+
+/** Appends a part's triangles. Parts: { box: [w, h, d] } or { cyl: [radius, length], seg? } along Z, with c (centre), rx/ry (radians), m (material). */
+function emit(part, mesh) {
+  const { c, rx = 0, ry = 0 } = part;
+  const add = (p, n, u, v) => {
+    const q = rot(p, rx, ry), nn = rot(n, rx, ry);
+    mesh.pos.push(q[0] + c[0], q[1] + c[1], q[2] + c[2]);
+    mesh.nrm.push(...nn);
+    mesh.uv.push(u, v);
+    return mesh.pos.length / 3 - 1;
+  };
+  if (part.box) {
+    const s = part.box;
+    for (const [n, u, w] of FACES) {
+      const ids = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) =>
+        add([0, 1, 2].map(k => ((n[k] + u[k] * a + w[k] * b) / 2) * s[k]), n, (a + 1) / 2, (1 - b) / 2));
+      mesh.idx.push(ids[0], ids[1], ids[2], ids[0], ids[2], ids[3]);
+    }
+  } else {
+    const [r, len] = part.cyl, seg = part.seg ?? 14;
+    const ring = [];
+    for (let j = 0; j <= seg; j++) {
+      const t = (j / seg) * Math.PI * 2, x = Math.cos(t), y = Math.sin(t);
+      ring.push([add([x * r, y * r, len / 2], [x, y, 0], j / seg, 0), add([x * r, y * r, -len / 2], [x, y, 0], j / seg, 1)]);
+    }
+    for (let j = 0; j < seg; j++) mesh.idx.push(ring[j][0], ring[j][1], ring[j + 1][0], ring[j + 1][0], ring[j][1], ring[j + 1][1]);
+    for (const [z, nz] of [[len / 2, 1], [-len / 2, -1]]) {
+      const centre = add([0, 0, z], [0, 0, nz], 0.5, 0.5);
+      const rim = [];
+      for (let j = 0; j <= seg; j++) { const t = (j / seg) * Math.PI * 2; rim.push(add([Math.cos(t) * r, Math.sin(t) * r, z], [0, 0, nz], 0.5, 0.5)); }
+      for (let j = 0; j < seg; j++) mesh.idx.push(...(nz > 0 ? [centre, rim[j], rim[j + 1]] : [centre, rim[j + 1], rim[j]]));
+    }
+  }
+}
+
+/** parts: see `emit`. materials: [{ name?, color, metallic, roughness, emissive?, textured? }] */
+function glb(parts, materials) {
   const chunks = [];
   const views = [], accessors = [], primitives = [];
   let offset = 0;
   const push = (buf, target) => { views.push({ buffer: 0, byteOffset: offset, byteLength: buf.length, ...(target ? { target } : {}) }); chunks.push(buf); offset += buf.length; const pad = (4 - (offset % 4)) % 4; if (pad) { chunks.push(Buffer.alloc(pad)); offset += pad; } return views.length - 1; };
   materials.forEach((_, mi) => {
-    const pos = [], nrm = [], uv = [], idx = [];
-    for (const b of boxes.filter(b => b.m === mi)) {
-      for (const [n, u, w] of FACES) {
-        const base = pos.length / 3;
-        for (const [a, c] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
-          for (let k = 0; k < 3; k++) pos.push(b.c[k] + ((n[k] + u[k] * a + w[k] * c) / 2) * b.s[k]);
-          nrm.push(...n);
-          // Texel density follows size so the pattern does not stretch.
-          const su = Math.abs(u[0] * b.s[0] + u[1] * b.s[1] + u[2] * b.s[2]), sw = Math.abs(w[0] * b.s[0] + w[1] * b.s[1] + w[2] * b.s[2]);
-          uv.push(((a + 1) / 2) * su * 6, ((1 - c) / 2) * sw * 6);
-        }
-        idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
-      }
-    }
-    if (!idx.length) return;
+    const mesh = { pos: [], nrm: [], uv: [], idx: [] };
+    for (const p of parts.filter(p => p.m === mi)) emit(p, mesh);
+    if (!mesh.idx.length) return;
     const f32 = a => Buffer.from(new Float32Array(a).buffer);
-    const count = pos.length / 3;
-    const mins = [0, 1, 2].map(k => Math.min(...pos.filter((_, i) => i % 3 === k))), maxs = [0, 1, 2].map(k => Math.max(...pos.filter((_, i) => i % 3 === k)));
+    const count = mesh.pos.length / 3;
+    const axis = k => mesh.pos.filter((_, i) => i % 3 === k);
+    const mins = [0, 1, 2].map(k => Math.min(...axis(k))), maxs = [0, 1, 2].map(k => Math.max(...axis(k)));
     const acc = (view, type, componentType, n, extra = {}) => { accessors.push({ bufferView: view, componentType, count: n, type, ...extra }); return accessors.length - 1; };
     primitives.push({
       attributes: {
-        POSITION: acc(push(f32(pos), 34962), 'VEC3', 5126, count, { min: mins, max: maxs }),
-        NORMAL: acc(push(f32(nrm), 34962), 'VEC3', 5126, count),
-        TEXCOORD_0: acc(push(f32(uv), 34962), 'VEC2', 5126, count),
+        POSITION: acc(push(f32(mesh.pos), 34962), 'VEC3', 5126, count, { min: mins, max: maxs }),
+        NORMAL: acc(push(f32(mesh.nrm), 34962), 'VEC3', 5126, count),
+        TEXCOORD_0: acc(push(f32(mesh.uv), 34962), 'VEC2', 5126, count),
       },
-      indices: acc(push(Buffer.from(new Uint16Array(idx).buffer), 34963), 'SCALAR', 5123, idx.length),
+      indices: acc(push(Buffer.from(new Uint16Array(mesh.idx).buffer), 34963), 'SCALAR', 5123, mesh.idx.length),
       material: mi,
     });
   });
@@ -76,11 +106,12 @@ function glb(boxes, materials) {
     nodes: [{ mesh: 0 }],
     meshes: [{ primitives }],
     materials: materials.map(m => ({
-      pbrMetallicRoughness: { baseColorFactor: [...m.color, 1], metallicFactor: m.metallic, roughnessFactor: m.roughness, baseColorTexture: { index: 0 } },
+      ...(m.name ? { name: m.name } : {}),
+      pbrMetallicRoughness: { baseColorFactor: [...m.color, 1], metallicFactor: m.metallic, roughnessFactor: m.roughness, ...(m.textured ? { baseColorTexture: { index: 0 } } : {}) },
       ...(m.emissive ? { emissiveFactor: [m.emissive, m.emissive, m.emissive] } : {}),
     })),
     textures: [{ source: 0, sampler: 0 }],
-    samplers: [{ magFilter: 9729, minFilter: 9729, wrapS: 10497, wrapT: 10497 }],
+    samplers: [{ magFilter: 9729, minFilter: 9987, wrapS: 10497, wrapT: 10497 }],
     images: [{ bufferView: imageView, mimeType: 'image/png' }],
     accessors,
     bufferViews: views,
@@ -95,44 +126,126 @@ function glb(boxes, materials) {
   return Buffer.concat([header, chunkHeader(jsonBuf.length, 0x4e4f534a), jsonBuf, chunkHeader(bin.length, 0x004e4942), bin]);
 }
 
-const steel = { color: [0.2, 0.21, 0.23], metallic: 0.9, roughness: 0.38 };
-const polymer = { color: [0.09, 0.09, 0.1], metallic: 0.0, roughness: 0.7 };
-const accent = c => ({ color: c, metallic: 0.3, roughness: 0.5 });
+// Material slots. "layer:N" names map to the game's procedural materials (6 gun metal, 9 polymer,
+// 2 painted steel); the rest are plain factors (and the embedded texture, for authored-model parity).
+const M = { metal: 0, polymer: 1, accent: 2, dark: 3, glass: 4 };
+const mats = accent => [
+  { name: 'layer:6', color: [1, 1, 1], metallic: 1, roughness: 1 },
+  { name: 'layer:9', color: [1, 1, 1], metallic: 0, roughness: 1 },
+  accent,
+  { color: [0.02, 0.02, 0.022], metallic: 0.2, roughness: 0.6, textured: true },
+  { color: [0.05, 0.12, 0.16], metallic: 0.9, roughness: 0.08 },
+];
+const paint = c => ({ name: 'layer:2', color: c, metallic: 0.5, roughness: 1 });
 const glow = c => ({ color: c, metallic: 0.0, roughness: 0.4, emissive: 2.5 });
 
-// Guns point down -Z with the grip at the origin. Sizes in metres.
-function gun({ len, barrel, mag, stock = 0, drum = false, scope = false, body = 0.06, color }) {
-  const b = [
-    { c: [0, 0.05, -len / 2 + 0.05], s: [0.045, body, len], m: 0 }, // receiver
-    { c: [0, 0.06, -len - barrel / 2 + 0.05], s: [0.022, 0.022, barrel], m: 0 }, // barrel
-    { c: [0, -0.05, 0.02], s: [0.036, 0.11, 0.045], m: 1 }, // grip
-    { c: [0, 0.09, -len + 0.08], s: [0.01, 0.02, 0.012], m: 2 }, // front sight
-    { c: [0, 0.055, -len * 0.55], s: [0.05, 0.02, len * 0.35], m: 2 }, // accent rail
+/** A picatinny-style rail: a strip with evenly spaced cross slots. */
+const rail = (z0, z1, y, m = M.metal) => {
+  const out = [{ box: [0.022, 0.006, z1 - z0], c: [0, y, (z0 + z1) / 2], m }];
+  for (let z = z0 + 0.008; z < z1; z += 0.01) out.push({ box: [0.024, 0.006, 0.005], c: [0, y + 0.005, z], m });
+  return out;
+};
+
+/**
+ * Generic firearm. Points down -Z with the pistol grip at the origin. All sizes in metres.
+ * len: receiver length, barrel: exposed barrel, mag: magazine height (0 none), stock: stock length,
+ * guard: handguard length, scope, drum, pump, bulk (receiver height).
+ */
+function gun({ len, barrel, mag = 0, stock = 0, guard = 0, scope = false, drum = false, pump = false, bulk = 0.06, muzzle = 'brake', accent }) {
+  const top = 0.03 + bulk / 2;
+  const front = -len;
+  const p = [
+    { box: [0.036, bulk * 0.55, len * 0.62], c: [0, 0.03 - bulk * 0.12, -len * 0.42], m: M.metal }, // lower receiver
+    { box: [0.032, bulk * 0.5, len], c: [0, 0.03 + bulk * 0.25, -len / 2 + 0.03], m: M.metal }, // upper receiver
+    { box: [0.008, 0.016, 0.05], c: [0.019, 0.04 + bulk * 0.2, -len * 0.35], m: M.dark }, // ejection port
+    { box: [0.014, 0.01, 0.03], c: [0.01, top + 0.003, 0.03], m: M.metal }, // charging handle
+    { box: [0.03, 0.1, 0.038], c: [0, -0.045, 0.012], rx: -0.28, m: M.polymer }, // grip
+    { box: [0.006, 0.006, 0.05], c: [0, -0.03, -0.035], m: M.metal }, // trigger guard
+    { box: [0.004, 0.022, 0.006], c: [0, -0.012, -0.022], rx: 0.3, m: M.metal }, // trigger
+    ...rail(-len + 0.02, 0.0, top + 0.004),
+    { box: [0.006, 0.022, 0.012], c: [0, top + 0.016, -0.0], m: M.metal }, // rear sight
   ];
-  if (mag) b.push({ c: [0, -0.02 - mag / 2, -len * 0.4], s: drum ? [0.09, mag, 0.09] : [0.03, mag, 0.05], m: 1 });
-  if (stock) b.push({ c: [0, 0.03, 0.05 + stock / 2], s: [0.035, 0.07, stock], m: 1 });
-  if (scope) b.push({ c: [0, 0.12, -len * 0.4], s: [0.035, 0.035, 0.22], m: 0 }, { c: [0, 0.095, -len * 0.4], s: [0.015, 0.02, 0.05], m: 0 });
-  return glb(b, [steel, polymer, color]);
+  const gl = guard || len * 0.5;
+  if (pump) p.push({ cyl: [0.024, gl * 0.6], c: [0, 0.012, front - gl * 0.25], m: M.polymer });
+  else if (guard) {
+    p.push({ cyl: [0.024, gl], c: [0, 0.035, front - gl / 2 + 0.03], seg: 8, m: M.polymer });
+    for (let i = 0; i < 4; i++) p.push({ box: [0.05, 0.008, 0.016], c: [0, 0.035, front - 0.02 - i * (gl / 4)], m: M.dark });
+    p.push(...rail(front - gl + 0.04, front + 0.02, 0.064));
+  }
+  const bz = front - (guard || 0) + 0.03;
+  p.push({ cyl: [0.0085, barrel + (guard || 0)], c: [0, 0.035, bz - barrel / 2 + (guard || 0) / 2], m: M.metal }); // barrel
+  if (pump) p.push({ cyl: [0.012, barrel * 0.85], c: [0, 0.01, bz - barrel * 0.42], m: M.metal }); // magazine tube
+  const tip = bz - barrel;
+  if (muzzle === 'brake') {
+    p.push({ cyl: [0.0135, 0.05], c: [0, 0.035, tip - 0.02], seg: 10, m: M.metal });
+    for (const z of [-0.008, -0.022, -0.036]) p.push({ box: [0.03, 0.006, 0.004], c: [0, 0.035, tip + z], m: M.dark });
+  } else if (muzzle === 'suppressor') {
+    p.push({ cyl: [0.018, 0.16], c: [0, 0.035, tip - 0.07], m: M.polymer });
+  }
+  p.push({ box: [0.006, 0.026, 0.008], c: [0, 0.06, tip + 0.03], m: M.metal }); // front sight
+  if (mag) {
+    if (drum) p.push({ cyl: [0.06, 0.05], c: [0, -0.06, -len * 0.42], ry: Math.PI / 2, m: M.polymer });
+    else p.push({ box: [0.026, mag, 0.05], c: [0, -mag / 2 + 0.005, -len * 0.42], rx: 0.18, m: M.polymer });
+  }
+  if (stock) {
+    p.push({ cyl: [0.016, stock * 0.6], c: [0, 0.035, 0.03 + stock * 0.3], m: M.metal }); // buffer tube
+    p.push({ box: [0.036, 0.075, stock * 0.55], c: [0, 0.02, 0.03 + stock * 0.68], m: M.polymer }); // stock
+    p.push({ box: [0.04, 0.09, 0.016], c: [0, 0.015, 0.03 + stock], m: M.polymer }); // butt pad
+    p.push({ box: [0.03, 0.016, stock * 0.4], c: [0, 0.065, 0.03 + stock * 0.68], m: M.polymer }); // cheek riser
+  }
+  if (scope) {
+    p.push({ cyl: [0.017, 0.24], c: [0, top + 0.05, -len * 0.4], m: M.metal });
+    p.push({ cyl: [0.024, 0.05], c: [0, top + 0.05, -len * 0.4 - 0.13], m: M.metal });
+    p.push({ cyl: [0.021, 0.04], c: [0, top + 0.05, -len * 0.4 + 0.12], m: M.metal });
+    p.push({ cyl: [0.02, 0.002], c: [0, top + 0.05, -len * 0.4 - 0.156], m: M.glass });
+    for (const z of [-0.06, 0.06]) p.push({ box: [0.03, 0.03, 0.014], c: [0, top + 0.02, -len * 0.4 + z], m: M.metal });
+  } else {
+    // Small reflex sight on the rail.
+    p.push({ box: [0.03, 0.03, 0.04], c: [0, top + 0.022, -len * 0.3], m: M.metal });
+    p.push({ box: [0.02, 0.018, 0.002], c: [0, top + 0.03, -len * 0.3 - 0.021], m: M.glass });
+  }
+  p.push({ box: [0.04, 0.006, len * 0.3], c: [0, 0.03 + bulk * 0.25, -len * 0.55], m: M.accent }); // accent stripe
+  return glb(p, mats(accent));
+}
+
+/** Handgun: slide, frame and grip. */
+function pistol({ len = 0.19, accent, auto = false }) {
+  const p = [
+    { box: [0.028, 0.032, len], c: [0, 0.045, -len / 2 + 0.03], m: M.metal }, // slide
+    { box: [0.006, 0.02, 0.05], c: [0.0145, 0.05, -0.02], m: M.dark }, // serrations
+    { box: [0.026, 0.02, len * 0.85], c: [0, 0.018, -len * 0.42 + 0.02], m: M.polymer }, // frame
+    { box: [0.028, 0.11, 0.045], c: [0, -0.04, 0.012], rx: -0.22, m: M.polymer },
+    { box: [0.005, 0.005, 0.045], c: [0, -0.005, -0.03], m: M.polymer }, // trigger guard
+    { cyl: [0.0055, 0.01], c: [0, 0.048, -len + 0.025], m: M.dark }, // muzzle
+    { box: [0.004, 0.008, 0.006], c: [0, 0.065, -len + 0.04], m: M.metal },
+    { box: [0.02, 0.008, 0.006], c: [0, 0.065, 0.025], m: M.metal },
+    { box: [0.03, 0.004, len * 0.3], c: [0, 0.062, -len * 0.4], m: M.accent },
+  ];
+  if (auto) p.push({ box: [0.022, 0.13, 0.04], c: [0, -0.1, 0.0], rx: -0.22, m: M.polymer }, { cyl: [0.016, 0.1], c: [0, 0.045, -len - 0.02], m: M.polymer });
+  return glb(p, mats(accent));
 }
 
 const models = {
-  'weapons/p9': gun({ len: 0.2, barrel: 0.03, mag: 0, color: accent([0.5, 0.5, 0.55]) }),
-  'weapons/hornet': gun({ len: 0.24, barrel: 0.05, mag: 0.16, color: accent([0.85, 0.7, 0.1]) }),
-  'weapons/vespa': gun({ len: 0.36, barrel: 0.08, mag: 0.2, stock: 0.14, color: accent([0.9, 0.45, 0.1]) }),
-  'weapons/kestrel': gun({ len: 0.5, barrel: 0.2, mag: 0.16, stock: 0.24, color: accent([0.2, 0.5, 0.3]) }),
-  'weapons/carbine': gun({ len: 0.52, barrel: 0.26, mag: 0.1, stock: 0.26, color: accent([0.45, 0.3, 0.18]) }),
-  'weapons/breacher': gun({ len: 0.48, barrel: 0.3, mag: 0, stock: 0.24, body: 0.075, color: accent([0.5, 0.15, 0.12]) }),
-  'weapons/anvil': gun({ len: 0.6, barrel: 0.3, mag: 0.12, stock: 0.26, drum: true, body: 0.08, color: accent([0.3, 0.33, 0.38]) }),
-  'weapons/longshot': gun({ len: 0.62, barrel: 0.5, mag: 0.08, stock: 0.3, scope: true, color: accent([0.15, 0.25, 0.4]) }),
-  'weapons/arc': gun({ len: 0.5, barrel: 0.22, mag: 0.12, stock: 0.2, body: 0.085, color: glow([0.25, 0.75, 1.0]) }),
-  'weapons/stormlance': gun({ len: 0.56, barrel: 0.3, mag: 0, stock: 0.22, body: 0.09, color: glow([0.7, 0.4, 1.0]) }),
-  'weapons/verdict': gun({ len: 0.26, barrel: 0.12, mag: 0, body: 0.075, color: glow([1.0, 0.6, 0.15]) }),
+  'weapons/p9': pistol({ accent: paint([0.6, 0.6, 0.62]) }),
+  'weapons/hornet': pistol({ len: 0.22, auto: true, accent: paint([0.85, 0.65, 0.15]) }),
+  'weapons/vespa': gun({ len: 0.3, barrel: 0.04, mag: 0.2, stock: 0.18, guard: 0.14, muzzle: 'suppressor', accent: paint([0.85, 0.4, 0.12]) }),
+  'weapons/kestrel': gun({ len: 0.4, barrel: 0.1, mag: 0.17, stock: 0.24, guard: 0.26, accent: paint([0.25, 0.45, 0.3]) }),
+  'weapons/carbine': gun({ len: 0.42, barrel: 0.16, mag: 0.1, stock: 0.26, guard: 0.22, accent: paint([0.5, 0.35, 0.2]) }),
+  'weapons/breacher': gun({ len: 0.36, barrel: 0.32, mag: 0, stock: 0.26, pump: true, bulk: 0.07, muzzle: 'none', accent: paint([0.45, 0.15, 0.12]) }),
+  'weapons/anvil': gun({ len: 0.5, barrel: 0.22, mag: 0.12, stock: 0.26, guard: 0.28, drum: true, bulk: 0.08, accent: paint([0.3, 0.33, 0.36]) }),
+  'weapons/longshot': gun({ len: 0.48, barrel: 0.4, mag: 0.08, stock: 0.3, guard: 0.2, scope: true, accent: paint([0.2, 0.28, 0.38]) }),
+  'weapons/arc': gun({ len: 0.44, barrel: 0.12, mag: 0.12, stock: 0.2, guard: 0.26, bulk: 0.085, muzzle: 'none', accent: glow([0.25, 0.75, 1.0]) }),
+  'weapons/stormlance': gun({ len: 0.48, barrel: 0.24, mag: 0, stock: 0.22, guard: 0.3, bulk: 0.09, muzzle: 'none', accent: glow([0.7, 0.4, 1.0]) }),
+  'weapons/verdict': pistol({ len: 0.26, accent: glow([1.0, 0.6, 0.15]) }),
   'props/generator': glb([
-    { c: [0, 0.6, 0], s: [1.6, 1.2, 1.0], m: 0 },
-    { c: [0, 1.3, 0], s: [1.2, 0.2, 0.7], m: 1 },
-    { c: [-0.5, 1.75, 0], s: [0.18, 0.7, 0.18], m: 0 },
-    { c: [0.45, 0.7, 0.51], s: [0.4, 0.3, 0.03], m: 2 },
-  ], [steel, polymer, glow([0.2, 1.0, 0.4])]),
+    { box: [1.6, 1.1, 1.0], c: [0, 0.65, 0], m: M.accent },
+    { box: [1.7, 0.1, 1.1], c: [0, 0.05, 0], m: M.metal },
+    { box: [1.2, 0.2, 0.7], c: [0, 1.3, 0], m: M.metal },
+    { cyl: [0.09, 0.8], c: [-0.5, 1.75, 0], rx: Math.PI / 2, m: M.metal },
+    { cyl: [0.12, 0.08], c: [-0.5, 2.18, 0], rx: Math.PI / 2, m: M.dark },
+    { box: [0.4, 0.3, 0.03], c: [0.45, 0.75, 0.51], m: 4 },
+    ...[-0.6, -0.3, 0, 0.3, 0.6].map(x => ({ box: [0.04, 0.8, 0.02], c: [x, 0.65, -0.51], m: M.dark })),
+  ], [mats(null)[0], mats(null)[1], paint([0.55, 0.45, 0.12]), mats(null)[3], glow([0.2, 1.0, 0.4])]),
 };
 
 for (const [name, buf] of Object.entries(models)) {
