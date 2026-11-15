@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Grave Shift</title>
+  <meta name="description" content="Grave Shift: a browser movement shooter with round-based co-op survival. Play solo or share a party link.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23101418'/%3E%3Cpath d='M8 24V10l8-4 8 4v14h-5v-8h-6v8z' fill='%23ff7a2f'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/src/ui/style.css">
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <div id="hud" hidden>
+    <div id="crosshair"><i></i><i></i><i></i><i></i></div>
+    <div id="hitmarker" hidden></div>
+    <div id="scope" hidden></div>
+    <div id="top-left"><div id="round"></div><div id="left"></div><div id="quest"></div></div>
+    <div id="feed"></div>
+    <div id="banner"></div>
+    <div id="ping"></div>
+    <div id="center-low"><div id="prompt"></div><div id="progress-track"><div id="progress"></div></div></div>
+    <div id="bottom-left">
+      <div id="perks"></div>
+      <div id="points"></div>
+      <div class="bar"><div id="health-fill"></div></div>
+      <div class="bar thin"><div id="thrust-fill"></div></div>
+    </div>
+    <div id="bottom-right">
+      <div id="ability"><span id="ability-name"></span><div class="bar thin"><div id="ability-fill"></div></div></div>
+      <div id="weapon"></div>
+      <div><span id="ammo"></span> <span id="reserve"></span></div>
+      <div id="equip"></div>
+    </div>
+    <div id="scoreboard" hidden></div>
+  </div>
+
+  <div id="menu">
+    <section id="screen-loading" class="screen"><h1>Grave Shift</h1><p id="loading-text">Loading...</p></section>
+
+    <section id="screen-main" class="screen" hidden>
+      <h1>Grave Shift</h1>
+      <p class="tag">Thrust. Wall-run. Survive the shift.</p>
+      <label>Name <input id="name" maxlength="16" autocomplete="off" spellcheck="false"></label>
+      <div class="row">
+        <button id="btn-solo" class="primary">Play solo</button>
+        <button id="btn-host">Host a party</button>
+      </div>
+      <div class="row">
+        <input id="join-code" placeholder="PARTY CODE" maxlength="7" autocomplete="off" spellcheck="false">
+        <button id="btn-join">Join</button>
+      </div>
+      <div class="row">
+        <button id="btn-loadout">Loadout</button>
+        <button id="btn-settings">Settings</button>
+      </div>
+      <p id="main-error" class="error"></p>
+      <p class="hint">WASD move · Shift sprint · C slide · Space jump, hold to thrust · run along walls · Mouse fire/aim · R reload · F use · Q ability · G/E equipment · V melee · Z tonic · Tab scores</p>
+      <p class="hint" id="renderer-info"></p>
+    </section>
+
+    <section id="screen-lobby" class="screen" hidden>
+      <h2>Party <span id="lobby-code"></span></h2>
+      <div class="row"><input id="lobby-link" readonly><button id="btn-copy">Copy invite link</button></div>
+      <ul id="lobby-players"></ul>
+      <div class="row">
+        <label>Mode <select id="lobby-mode"></select></label>
+        <label>Map <select id="lobby-map"></select></label>
+      </div>
+      <p id="lobby-status" class="hint"></p>
+      <div class="row">
+        <button id="btn-start" class="primary">Start match</button>
+        <button id="btn-ready">Ready</button>
+        <button id="btn-lobby-loadout">Loadout</button>
+        <button id="btn-leave">Leave</button>
+      </div>
+    </section>
+
+    <section id="screen-loadout" class="screen wide" hidden>
+      <h2>Loadout <span id="loadout-points"></span></h2>
+      <p class="hint">Ten points. Every weapon, attachment, perk, piece of equipment and wildcard costs one. Streaks, ability and tonics are free. Used in Skirmish; Survival uses your ability and tonic pack.</p>
+      <div id="loadout-grid"></div>
+      <p id="loadout-error" class="error"></p>
+      <div class="row"><button id="btn-loadout-done" class="primary">Done</button><button id="btn-loadout-reset">Reset</button></div>
+    </section>
+
+    <section id="screen-settings" class="screen" hidden>
+      <h2>Settings</h2>
+      <label>Mouse sensitivity <input id="set-sens" type="range" min="0.2" max="3" step="0.05"></label>
+      <label>Field of view <input id="set-fov" type="range" min="70" max="110" step="1"></label>
+      <label>Volume <input id="set-volume" type="range" min="0" max="1" step="0.05"></label>
+      <label><input id="set-blur" type="checkbox"> Motion blur</label>
+      <label><input id="set-dof" type="checkbox"> Depth of field</label>
+      <div class="row"><button id="btn-settings-done" class="primary">Done</button></div>
+    </section>
+
+    <section id="screen-pause" class="screen" hidden>
+      <h2 id="pause-title">Paused</h2>
+      <p id="pause-code" class="hint"></p>
+      <div class="row">
+        <button id="btn-resume" class="primary">Resume</button>
+        <button id="btn-pause-settings">Settings</button>
+        <button id="btn-end">Leave match</button>
+      </div>
+    </section>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
