@@ -85,11 +85,13 @@ async function shoot(page, file) {
   // WebGPU canvases are not captured by headless screenshots, so read the frame back and overlay it.
   // Then stop drawing: a screenshot waits for the page to produce a frame, and software-rendered
   // frames are slow enough to time it out.
+  // The readback comes from the next rendered frame, so take it before stopping the render loop.
   await page.evaluate(async () => {
     const r = window.app.renderer;
-    window.app.frame = () => {};
-    if (!r.capture) return;
-    const img = await r.capture();
+    const stop = () => { window.app.frame = () => {}; };
+    if (!r.capture) return stop();
+    const img = await Promise.race([r.capture(), new Promise((_, no) => setTimeout(() => no(new Error('WebGPU frame readback timed out')), 60000))]);
+    stop();
     const c = document.createElement('canvas');
     c.width = img.width; c.height = img.height;
     c.getContext('2d').putImageData(img, 0, 0);
