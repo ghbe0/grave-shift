@@ -94,3 +94,49 @@ button:disabled { opacity: 0.45; cursor: default; }
 #scoreboard tr.me { color: var(--accent); }
 #scoreboard i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 8px; }
 @media (max-width: 640px) { h1 { font-size: 32px; } #round { font-size: 38px; } #bottom-left { width: 180px; } }
+
+/* ---- Touch controls (phones and tablets) ---- */
+canvas { touch-action: none; }
+body.touch input, body.touch select { font-size: 16px; } /* iOS zooms into smaller text fields */
+#touch { position: fixed; inset: 0; z-index: 5; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; --sr: max(16px, env(safe-area-inset-right)); --sl: max(16px, env(safe-area-inset-left)); }
+.stick-base { position: absolute; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.35); background: rgba(0, 0, 0, 0.25); opacity: 0; pointer-events: none; transition: opacity 0.1s; }
+.stick-base.active { opacity: 1; }
+.stick-base.sprint { border-color: var(--accent); box-shadow: 0 0 12px rgba(255, 122, 47, 0.5); }
+.stick-knob { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; border-radius: 50%; background: rgba(255, 255, 255, 0.55); transform: translate(-50%, -50%); }
+.stick-hint { position: absolute; left: var(--sl); bottom: max(16px, env(safe-area-inset-bottom)); color: rgba(255, 255, 255, 0.3); font-size: 12px; pointer-events: none; }
+.tb { position: absolute; padding: 0; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.4); background: rgba(10, 14, 18, 0.45); color: #fff; font: 700 12px/1 system-ui, sans-serif; display: grid; place-items: center; touch-action: none; -webkit-tap-highlight-color: transparent; }
+.tb:hover { background: rgba(10, 14, 18, 0.45); }
+.tb.down, .tb.on { background: rgba(255, 122, 47, 0.55); border-color: var(--accent); }
+.tb-fire { width: 86px; height: 86px; right: calc(var(--sr) + 92px); bottom: 104px; font-size: 14px; border-color: rgba(255, 122, 47, 0.8); }
+.tb-ads { width: 60px; height: 60px; right: calc(var(--sr) + 192px); bottom: 146px; }
+.tb-jump { width: 64px; height: 64px; right: var(--sr); bottom: 92px; }
+.tb-crouch { width: 58px; height: 58px; right: calc(var(--sr) + 98px); bottom: 24px; font-size: 11px; }
+.tb-melee { width: 52px; height: 52px; right: var(--sr); bottom: 24px; font-size: 10px; }
+.tb-reload { width: 48px; height: 48px; right: var(--sr); bottom: 172px; }
+.tb-swap { width: 46px; height: 46px; right: var(--sr); bottom: 232px; font-size: 18px; }
+.tb-use { width: 56px; height: 56px; right: calc(var(--sr) + 196px); bottom: 62px; }
+.tb-lethal { width: 44px; height: 44px; right: calc(var(--sr) + 60px); bottom: 218px; }
+.tb-tactical { width: 44px; height: 44px; right: calc(var(--sr) + 114px); bottom: 216px; }
+.tb-ability { width: 48px; height: 48px; right: calc(var(--sr) + 172px); bottom: 222px; }
+.tb-tonic { width: 42px; height: 42px; right: calc(var(--sr) + 270px); bottom: 70px; }
+.tb-pause, .tb-scores { width: 40px; height: 40px; top: max(10px, env(safe-area-inset-top)); border-radius: 10px; font-size: 15px; }
+.tb-pause { left: var(--sl); }
+.tb-scores { left: calc(var(--sl) + 48px); }
+/* While playing on touch, the HUD moves out from under the thumbs. */
+body.touch-play #top-left { top: 58px; left: max(16px, env(safe-area-inset-left)); }
+body.touch-play #round { font-size: 34px; }
+body.touch-play #quest { font-size: 11px; max-width: 240px; }
+body.touch-play #bottom-left { top: 10px; bottom: auto; left: calc(max(16px, env(safe-area-inset-left)) + 104px); width: 170px; gap: 3px; }
+body.touch-play #points { font-size: 20px; }
+/* Weapon, ammo and ability go to the top centre: the right edge belongs to the buttons. */
+body.touch-play #bottom-right { top: max(6px, env(safe-area-inset-top)); bottom: auto; right: auto; left: 50%; transform: translateX(-50%); text-align: center; gap: 0; }
+body.touch-play #ability { width: 130px; margin: 0 auto; font-size: 11px; }
+body.touch-play #weapon { font-size: 12px; }
+body.touch-play #ammo { font-size: 24px; }
+body.touch-play #reserve { font-size: 13px; }
+body.touch-play #equip { font-size: 11px; }
+body.touch-play #fps { top: auto; bottom: max(6px, env(safe-area-inset-bottom)); }
+body.touch-play #feed { top: 120px; font-size: 12px; }
+body.touch-play #center-low { top: 52%; font-size: 14px; }
+#rotate { position: fixed; inset: 0; z-index: 20; display: none; place-items: center; padding: 24px; background: var(--bg); color: var(--text); font-size: 18px; text-align: center; }
+@media (orientation: portrait) { body.touch-play #rotate { display: grid; } }

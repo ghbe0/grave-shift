@@ -179,3 +179,29 @@ describe('hostile peers', () => {
     expect(decodeSnap(L, new Float32Array([1, 0, 1, 0, 0, 7, 0, 0, 0, 0]))?.zombies.length).toBe(1);
   });
 });
+
+describe('renaming', () => {
+  it('guests and the host can rename at any time; names stay clean and unique', async () => {
+    const t = new LocalTransport();
+    const host = await HostLobby.create(t, 'Host', [3], 2);
+    const ann = await GuestLobby.join(t, host.code, 'Ann', 'tok-a', [3]);
+    const bob = await GuestLobby.join(t, host.code, 'Bob', 'tok-b', [3]);
+    ann.setName('  Annie <3  ');
+    await tick();
+    expect(host.state.players.map(p => p.name)).toEqual(['Host', 'Annie 3', 'Bob']);
+    bob.setName('Annie 3');
+    await tick();
+    expect(bob.state.players.map(p => p.name)).toEqual(['Host', 'Annie 3', 'Annie 3 2']);
+    // Renaming to your own current name keeps it as it is (no " 2" suffix).
+    ann.setName('Annie 3');
+    host.setName('Captain');
+    await tick();
+    expect(ann.state.players.map(p => p.name)).toEqual(['Captain', 'Annie 3', 'Annie 3 2']);
+    // Renames work mid-match too.
+    host.start(1);
+    bob.setName('Robert');
+    await tick();
+    expect(ann.state.players[2].name).toBe('Robert');
+    host.close();
+  });
+});

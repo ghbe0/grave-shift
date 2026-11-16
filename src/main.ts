@@ -4,6 +4,7 @@ import { loadSim } from './core/load';
 import type { Sim } from './core/sim';
 import { Input } from './engine/input';
 import { Ticker } from './engine/ticker';
+import { isTouchDevice, TouchControls } from './engine/touch';
 import { Scene } from './game/scene';
 import { Session } from './game/session';
 import { frameRateOptions, FrameLimiter, FrameMeter, isFpsLimit } from './engine/pacing';
@@ -26,13 +27,24 @@ interface Settings {
   /** Frame rate cap; 0 draws every display refresh (up to 360 Hz and beyond). */
   fpsLimit: number;
   showFps: boolean;
+  /** Rendering resolution as a fraction of the screen's, 0.5..1. */
+  renderScale: number;
+  /** On-screen controls: follow the device, or force on/off. */
+  touch: 'auto' | 'on' | 'off';
+  touchSens: number;
 }
-const DEFAULTS: Settings = { sens: 1, fov: 90, volume: 0.5, blur: true, dof: true, textures: 'high', fpsLimit: 0, showFps: false };
+const DEFAULTS: Settings = { sens: 1, fov: 90, volume: 0.5, blur: true, dof: true, textures: 'high', fpsLimit: 0, showFps: false, renderScale: 1, touch: 'auto', touchSens: 1 };
+/** Phones start lighter: they have less GPU and memory than a desktop, and post effects cost the most. */
+const PHONE_DEFAULTS: Partial<Settings> = { textures: 'medium', blur: false, dof: false, renderScale: 0.75, fov: 80 };
 function loadSettings(): Settings {
   let s: Settings;
-  try { s = { ...DEFAULTS, ...JSON.parse(localStorage.getItem('gs.settings') ?? '{}') }; } catch { s = { ...DEFAULTS }; }
+  let saved: Partial<Settings> | null = null;
+  try { saved = JSON.parse(localStorage.getItem('gs.settings') ?? 'null'); } catch { /* storage may be blocked */ }
+  s = { ...DEFAULTS, ...(saved ? {} : isTouchDevice() ? PHONE_DEFAULTS : {}), ...(saved ?? {}) };
   if (!(s.textures in TEXTURE_QUALITY)) s.textures = DEFAULTS.textures;
   if (!isFpsLimit(s.fpsLimit)) s.fpsLimit = 0;
+  if (!['auto', 'on', 'off'].includes(s.touch)) s.touch = 'auto';
+  s.renderScale = Math.min(1, Math.max(0.5, Number(s.renderScale) || 1));
   return s;
 }
 /** The refresh rate measured on a previous visit, so the menu is right before measuring again. */
@@ -95,7 +107,10 @@ class App {
     this.bindMenus();
     this.input.sensitivity = this.settings.sens;
     this.sfx.volume = this.settings.volume;
-    this.input.onUnlock = () => { if (this.session && this.screen === 'none') this.show('pause'); };
+    this.input.onUnlock = () => {
+      document.body.classList.remove('touch-play');
+      if (this.session && this.screen === 'none') this.show('pause');
+    };
 
     const code = codeFromUrl();
     this.show('main');
@@ -137,9 +152,20 @@ class App {
 
   private name(): string { return $<HTMLInputElement>('name').value.trim(); }
 
+  /** Saves a new player name everywhere and tells the party. */
+  private rename(raw: string): void {
+    const name = raw.replace(/[^\p{L}\p{N} _.-]/gu, '').trim().slice(0, 16);
+    for (const id of ['name', 'set-name', 'lobby-name']) $<HTMLInputElement>(id).value = name;
+    try { localStorage.setItem('gs.name', name); } catch { /* ignore */ }
+    if (!name) return;
+    this.host?.setName(name);
+    this.guest?.setName(name);
+    if (!this.host && !this.guest) this.hud.setNames([{ id: 0, name }]);
+  }
+
   private resize(): void {
     // ?low renders at half resolution for weak GPUs (and the automated browser tests).
-    const dpr = Math.min(devicePixelRatio, 2) * (params.has('low') ? 0.5 : 1);
+    const dpr = Math.min(devicePixelRatio, 2) * (params.has('low') ? 0.5 : this.settings.renderScale);
     const [w, h] = [Math.round(innerWidth * dpr), Math.round(innerHeight * dpr)];
     this.canvas.width = w;
     this.canvas.height = h;
@@ -154,9 +180,15 @@ class App {
   private error(text: string): void { $('main-error').textContent = text; }
 
   private bindMenus(): void {
-    const nameEl = $<HTMLInputElement>('name');
-    try { nameEl.value = localStorage.getItem('gs.name') ?? ''; } catch { /* ignore */ }
-    nameEl.onchange = () => { try { localStorage.setItem('gs.name', this.name()); } catch { /* ignore */ } };
+    // One name, editable in three places (main menu, settings, lobby). Changing it in a party renames
+    // you for everyone at once, even mid-match.
+    const nameEls = ['name', 'set-name', 'lobby-name'].map(id => $<HTMLInputElement>(id));
+    let saved = '';
+    try { saved = localStorage.getItem('gs.name') ?? ''; } catch { /* ignore */ }
+    for (const el of nameEls) {
+      el.value = saved;
+      el.onchange = () => this.rename(el.value);
+    }
 
     const click = (id: string, fn: () => void) => { $(id).onclick = () => { this.sfx.unlock(); fn(); }; };
     click('btn-solo', () => this.startSolo());
@@ -211,6 +243,13 @@ class App {
     bind('set-dof', 'dof', () => {});
     bind('set-showfps', 'showFps', () => ($('fps').hidden = !s.showFps));
     $('fps').hidden = !s.showFps;
+    bind('set-scale', 'renderScale', () => { this.resize(); $('scale-value').textContent = `${Math.round(s.renderScale * 100)}%`; });
+    $('scale-value').textContent = `${Math.round(s.renderScale * 100)}%`;
+    bind('set-touchsens', 'touchSens', () => { if (this.input.touch) this.input.touch.sensitivity = s.touchSens; });
+    const touchSel = $<HTMLSelectElement>('set-touch');
+    touchSel.value = s.touch;
+    touchSel.onchange = () => { s.touch = touchSel.value as Settings['touch']; saveSettings(s); this.applyTouchMode(); };
+    this.applyTouchMode();
 
     const texSel = $<HTMLSelectElement>('set-tex');
     for (const [key, q] of Object.entries(TEXTURE_QUALITY)) texSel.add(new Option(`${q.label} (${q.size} px, ${q.anisotropy}x filtering)`, key));
@@ -327,6 +366,9 @@ class App {
     const waiting = st.players.filter(p => !p.host && !p.ready).length;
     $('lobby-status').textContent = `${st.players.length} / ${MODES[st.mode].max} players · ${MODES[st.mode].desc}${isHost && waiting ? ` · ${waiting} not ready` : ''}`;
     if (!isHost) $('btn-ready').textContent = st.players.find(p => p.id === this.guest?.selfId)?.ready ? 'Not ready' : 'Ready';
+    const mine = st.players.find(p => p.id === (this.host ? 0 : this.guest?.selfId));
+    const lobbyName = $<HTMLInputElement>('lobby-name');
+    if (mine && document.activeElement !== lobbyName) lobbyName.value = mine.name;
   }
 
   private startParty(): void {
@@ -357,7 +399,33 @@ class App {
 
   private resume(): void {
     this.show('none');
+    if (this.input.touch) {
+      // Phones: full screen and landscape where the browser allows it (needs this tap's gesture).
+      void document.documentElement.requestFullscreen?.({ navigationUI: 'hide' })
+        .then(() => (screen.orientation as unknown as { lock?: (o: string) => Promise<void> }).lock?.('landscape'))
+        .catch(() => {});
+    }
     this.input.lock();
+    document.body.classList.toggle('touch-play', this.input.touchEngaged);
+  }
+
+  /** Turns the on-screen controls on or off to match the setting and the device. */
+  private applyTouchMode(): void {
+    const on = this.settings.touch === 'on' || (this.settings.touch === 'auto' && isTouchDevice());
+    if (on && !this.input.touch) {
+      const t = new TouchControls(document.body);
+      t.onPause = () => this.input.unlock();
+      t.onScores = down => (this.input.scoreboard = down);
+      this.input.touch = t;
+    } else if (!on && this.input.touch) {
+      this.input.touch.root.remove();
+      this.input.touch = null;
+    }
+    if (this.input.touch) this.input.touch.sensitivity = this.settings.touchSens;
+    document.body.classList.toggle('touch', on);
+    $('controls-hint').textContent = on
+      ? 'Left thumb: joystick (push all the way forward to sprint). Right thumb: drag to look; hold FIRE and drag to aim while shooting. AIM toggles aiming down sights.'
+      : 'WASD move · Shift sprint · C slide · Space jump, hold to thrust · run along walls · Mouse fire/aim · R reload · F use · Q ability · G/E equipment · V melee · Z tonic · Tab scores';
   }
 
   private sound(e: Float32Array): void {

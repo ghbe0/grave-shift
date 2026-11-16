@@ -3,7 +3,7 @@
 // Set E2E_SKIP_PEERJS=1 where the public PeerJS broker is unreachable (offline sandboxes).
 // Writes screenshots and a summary to e2e-results/. Exits non-zero if any check fails.
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { chromium } from 'playwright';
+import { chromium, devices } from 'playwright';
 
 const SITE = process.argv[2] ?? 'http://localhost:4180/grave-shift/';
 const OUT = 'e2e-results';
@@ -180,6 +180,61 @@ await check('settings: texture quality, frame rate cap and FPS counter', async (
   if (saved.textures !== 'low' || saved.fpsLimit !== 30 || saved.showFps !== true) throw new Error(`settings not saved: ${JSON.stringify(saved)}`);
   assertClean(page);
   return { displayHz: hz, fpsOptions: fpsOptions.map(o => o.value), materialSize: size, fps: +fps.toFixed(1), counter, firstSample: +before.toFixed(1) };
+});
+
+await check('phone: touch joystick, look, fire, pause', async () => {
+  // A phone in landscape with real touch input (Chrome DevTools touch events, so pointer events
+  // arrive exactly as from a finger). Waits are on conditions, not times: software rendering can
+  // delay input delivery by seconds.
+  const ctx = await browser.newContext({ ...devices['Pixel 7 landscape'] });
+  opened.push(ctx);
+  const page = await ctx.newPage();
+  page.problems = [];
+  page.setDefaultTimeout(90000);
+  page.on('pageerror', e => page.problems.push(`phone pageerror: ${e.message}`));
+  page.on('console', m => { if (m.type() === 'error') page.problems.push(`phone console: ${m.text().slice(0, 200)}`); });
+  const cdp = await ctx.newCDPSession(page);
+  const touch = (type, points) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points.map(([x, y, id]) => ({ x, y, id })) });
+  await page.goto(`${SITE}?renderer=webgl2&low`);
+  await page.waitForSelector('#screen-main:not([hidden])');
+  const setup = await page.evaluate(() => ({ touch: document.body.classList.contains('touch'), textures: window.app.settings.textures, scale: window.app.settings.renderScale }));
+  if (!setup.touch) throw new Error('phone not detected as a touch device');
+  await page.tap('#btn-solo');
+  await page.waitForFunction(() => window.app.session?.snap && window.app.input.touchEngaged && !document.getElementById('touch').hidden);
+  const me = () => page.evaluate(() => {
+    const a = window.app, s = a.session, P = a.sim.L.P, m = s.local();
+    return { x: m[P['ctl.pos']], z: m[P['ctl.pos'] + 2], yaw: s.yaw, ammo: m[P[`arms.guns${m[P['arms.cur']]}.ammo`]] };
+  });
+  const start = await me();
+  // Joystick: push fully forward and hold until the player has moved, then lift.
+  await touch('touchStart', [[150, 260, 1]]);
+  await touch('touchMove', [[150, 180, 1]]);
+  await page.waitForFunction(([x, z]) => { const a = window.app, P = a.sim.L.P, m = a.session.local(); return Math.hypot(m[P['ctl.pos']] - x, m[P['ctl.pos'] + 2] - z) > 1.5; }, [start.x, start.z]);
+  await touch('touchEnd', []);
+  await page.waitForFunction(() => window.app.input.touch.axis[1] === 0);
+  // Look: drag on the right of the screen.
+  const vp = page.viewportSize();
+  const yaw0 = (await me()).yaw;
+  await touch('touchStart', [[vp.width * 0.55, 80, 2]]);
+  for (let i = 1; i <= 8; i++) await touch('touchMove', [[vp.width * 0.55 + i * 12, 80, 2]]);
+  await touch('touchEnd', []);
+  await page.waitForFunction(y => Math.abs(window.app.session.yaw - y) > 0.1, yaw0);
+  // Fire: one tap fires one shot.
+  const fire = await page.locator('.tb-fire').boundingBox();
+  const ammo0 = (await me()).ammo;
+  await touch('touchStart', [[fire.x + fire.width / 2, fire.y + fire.height / 2, 3]]);
+  await touch('touchEnd', []);
+  await page.waitForFunction(a0 => { const a = window.app, P = a.sim.L.P, m = a.session.local(); return m[P[`arms.guns${m[P['arms.cur']]}.ammo`]] < a0; }, ammo0);
+  // Pause.
+  const pause = await page.locator('.tb-pause').boundingBox();
+  await touch('touchStart', [[pause.x + 20, pause.y + 20, 4]]);
+  await touch('touchEnd', []);
+  await page.waitForFunction(() => window.app.screen === 'pause' && document.getElementById('touch').hidden);
+  const end = await me();
+  await page.evaluate(() => { window.app.frame = () => {}; });
+  await page.screenshot({ path: `${OUT}/phone.png`, timeout: 120000 });
+  if (page.problems.length) throw new Error(page.problems.slice(0, 3).join(' | '));
+  return { ...setup, moved: +Math.hypot(end.x - start.x, end.z - start.z).toFixed(1), turned: +(end.yaw - yaw0).toFixed(2), ammo: `${ammo0} -> ${end.ammo}` };
 });
 
 /**

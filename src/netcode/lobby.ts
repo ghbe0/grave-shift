@@ -129,6 +129,7 @@ export class HostLobby {
       }
       member.budget -= 1;
       if (msg.t === 'ready') member.ready = !!msg.ready;
+      else if (msg.t === 'name') member.name = this.uniqueName(cleanName(msg.name), member.id);
       else if (msg.t === 'loadout') member.loadout = this.loadoutOf(msg.loadout);
       else return;
       this.sync();
@@ -140,8 +141,9 @@ export class HostLobby {
   private loadoutOf(l: unknown): number[] {
     return Array.isArray(l) ? l.slice(0, 32).map(v => (Number.isFinite(v) ? Math.trunc(v) : -1)) : [];
   }
-  private uniqueName(name: string): string {
-    const taken = new Set([...this.members.values()].map(m => m.name));
+  /** `name`, or `name 2`, `name 3`... if another player (not `self`) already has it. */
+  private uniqueName(name: string, self = -1): string {
+    const taken = new Set([...this.members.values()].filter(m => m.id !== self).map(m => m.name));
     let out = name;
     for (let n = 2; taken.has(out); n++) out = `${name} ${n}`;
     return out;
@@ -159,6 +161,12 @@ export class HostLobby {
   private broadcastCtl(msg: unknown) { for (const m of this.members.values()) m.link?.sendCtl(msg); }
 
   setLoadout(loadout: number[]) { this.members.get(0)!.loadout = loadout; }
+  /** Renames the host. Guests see it at once, including mid-match. */
+  setName(name: string) {
+    const me = this.members.get(0)!;
+    me.name = this.uniqueName(cleanName(name), 0);
+    this.sync();
+  }
   setMap(map: number) { if (!this.inMatch && map >= 0 && map < this.mapCount) { this.map = map; this.sync(); } }
   setMode(mode: number) {
     if (this.inMatch || !MODES[mode]) return;
@@ -264,6 +272,8 @@ export class GuestLobby {
 
   setReady(ready: boolean) { this.link.sendCtl({ t: 'ready', ready }); }
   setLoadout(loadout: number[]) { this.link.sendCtl({ t: 'loadout', loadout }); }
+  /** Asks the host to rename this player; the host cleans it and keeps names unique. */
+  setName(name: string) { this.link.sendCtl({ t: 'name', name }); }
   sendCmd(cmd: Float32Array) { this.link.sendRt(cmd); }
   close() { this.gone = true; this.link.close(); }
 }

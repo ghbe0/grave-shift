@@ -164,6 +164,7 @@ export class Session {
     const [mx, mz] = paused ? [0, 0] : input.move();
     const cmd = new Float32Array(CMD_LEN);
     cmd.set([++this.seq, TICK, mx, mz, this.yaw, this.pitch, paused ? 0 : input.buttons, paused ? -1 : input.takeSlot(), this.buffer.renderTime(this.now())]);
+    input.consumePresses();
     const { P } = this.sim.L;
 
     if (this.isGuest) {
