@@ -75,6 +75,12 @@ function emit(part, mesh) {
 
 /** parts: see `emit`. materials: [{ name?, color, metallic, roughness, emissive?, textured? }] */
 function glb(parts, materials) {
+  const built = glbBuffer(parts, materials);
+  built.parts = parts;
+  built.materials = materials;
+  return built;
+}
+function glbBuffer(parts, materials) {
   const chunks = [];
   const views = [], accessors = [], primitives = [];
   let offset = 0;
@@ -361,6 +367,46 @@ function rocket() {
   return glb(p, mats(paint([0.42, 0.48, 0.3])));
 }
 
+/**
+ * Side view of a model as an SVG picture (muzzle to the right), drawn from the same parts as the
+ * 3D model so loadout pictures always match what is in the player's hands.
+ */
+function sideView(parts, materials) {
+  const css = m => {
+    const mat = materials[m] ?? {};
+    if (mat.name === 'layer:6') return '#7c838d';
+    if (mat.name === 'layer:9') return '#2f333a';
+    if (m === M.dark) return '#16181c';
+    if (m === M.glass) return '#58c3ea';
+    const c = mat.color ?? [0.5, 0.5, 0.5];
+    const k = mat.emissive ? 1.25 : 1.0;
+    return '#' + c.map(v => Math.round(Math.min(1, Math.pow(v, 1 / 2.2) * k) * 255).toString(16).padStart(2, '0')).join('');
+  };
+  const shapes = [];
+  let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+  // Far side first, so parts nearer the viewer are painted over it.
+  for (const part of [...parts].sort((a, b) => a.c[0] - b.c[0])) {
+    const { c, rx = 0, ry = 0 } = part;
+    let pts;
+    if (part.cyl && Math.abs(Math.abs(ry) - Math.PI / 2) < 0.01) {
+      // A cylinder seen end-on: a disc.
+      const r = part.cyl[0];
+      pts = Array.from({ length: 16 }, (_, k) => [c[2] + Math.cos(k / 16 * 6.2832) * r, c[1] + Math.sin(k / 16 * 6.2832) * r]);
+    } else {
+      const [h, d] = part.box ? [part.box[1], part.box[2]] : [part.cyl[0] * 2, part.cyl[1]];
+      pts = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sy, sz]) => {
+        const y = sy * h / 2, z = sz * d / 2;
+        return [c[2] + y * Math.sin(rx) + z * Math.cos(rx), c[1] + y * Math.cos(rx) - z * Math.sin(rx)];
+      });
+    }
+    const out = pts.map(([z, y]) => [-z * 1000, -y * 1000]);
+    for (const [x, y] of out) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    shapes.push(`<polygon points="${out.map(q => q.map(v => v.toFixed(1)).join(',')).join(' ')}" fill="${css(part.m)}"/>`);
+  }
+  const pad = 12;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${(x0 - pad).toFixed(0)} ${(y0 - pad).toFixed(0)} ${(x1 - x0 + pad * 2).toFixed(0)} ${(y1 - y0 + pad * 2).toFixed(0)}" stroke="#0b0d10" stroke-width="1.6" stroke-linejoin="round">${shapes.join('')}</svg>\n`;
+}
+
 const models = {
   'weapons/p9': pistol({ accent: paint([0.6, 0.6, 0.62]) }),
   'weapons/hornet': pistol({ len: 0.22, auto: true, accent: paint([0.85, 0.65, 0.15]) }),
@@ -402,4 +448,5 @@ for (const [name, buf] of Object.entries(models)) {
   mkdirSync(path.slice(0, path.lastIndexOf('/')), { recursive: true });
   writeFileSync(path, buf);
   console.log(`${path} ${buf.length} bytes`);
+  if (name.startsWith('weapons/')) writeFileSync(`public/assets/${name}.svg`, sideView(buf.parts, buf.materials));
 }

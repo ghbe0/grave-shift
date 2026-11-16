@@ -385,7 +385,7 @@ class App {
   }
 
   private openCustomize(back: string): void { this.back = back; this.show('customize'); this.renderCustomize(); }
-  private openLoadout(back: string): void { this.back = back; this.editor.render(); this.show('loadout'); }
+  private openLoadout(back: string): void { this.back = back; this.editor.close(); this.editor.render(); this.show('loadout'); }
   private openSettings(back: string): void {
     this.back = back;
     this.show('settings');
