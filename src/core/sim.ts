@@ -179,6 +179,8 @@ export class Game {
   constructor(readonly sim: Sim, private x: X, private h: number, readonly map: number, readonly mode: number) {}
   free(): void { this.x.gs_free(this.h); }
   addPlayer(id: number, team: number, loadout: ArrayLike<number>): void { this.sim.io.set(loadout); this.x.gs_add_player(this.h, id, team); }
+  /** Moves a player to the other team mid-match; false if that would unbalance the sides. */
+  setTeam(id: number, team: number): boolean { return this.x.gs_set_team(this.h, id, team) === 1; }
   /** Match rules as numbers (see `rulesToFloats`); the core clamps them. */
   setRules(rules: ArrayLike<number>): void { this.sim.io.set(rules); this.x.gs_set_rules(this.h); }
   removePlayer(id: number): void { this.x.gs_remove_player(this.h, id); }

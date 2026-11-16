@@ -37,6 +37,7 @@ export class Hud {
   say(text: string, secs = 4): void { this.feed.push({ text, until: performance.now() + secs * 1000 }); if (this.feed.length > 5) this.feed.shift(); }
   announce(text: string, secs = 3): void { this.banner = { text, until: performance.now() + secs * 1000 }; }
 
+  name_(id: number): string { return this.name(id); }
   private myTeam(s: Session): number {
     const { P } = this.sim.L;
     return s.local()[P.team] ?? -1;
@@ -51,6 +52,7 @@ export class Hud {
       case 3: this.announce('The hill has moved', 3); break;
       case 4: if (e[2] === me) this.announce('Tag confirmed', 1.5); else this.say(`${this.name(e[2])} confirmed a kill`); break;
       case 5: if (e[2] === me) this.announce('Tag denied', 1.5); else this.say(`${this.name(e[2])} denied a kill`); break;
+      case 8: this.say(e[2] === me ? `You joined ${TEAM_NAMES[e[3]]}` : `${this.name(e[2])} switched to ${TEAM_NAMES[e[3]]}`); break;
       case 6: case 7: {
         if (e[2] !== me) { if (e[1] === 7) this.say(`${this.name(e[2])} was knocked down a rung`); break; }
         const w = this.sim.catalog.weapons[this.sim.catalog.ladder[e[3]]];

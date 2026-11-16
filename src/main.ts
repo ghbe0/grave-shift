@@ -290,6 +290,12 @@ class App {
     click('btn-pause-settings', () => this.openSettings('pause'));
     click('btn-settings-done', () => this.show(this.back));
     click('btn-resume', () => this.resume());
+    click('btn-switch-team', () => {
+      const s = this.session;
+      if (!s) return;
+      const team = s.local()[this.sim.L.P.team];
+      if (team === 0 || team === 1) s.switchTeam(1 - team);
+    });
     click('btn-end', () => this.leaveMatch());
     click('btn-leave', () => this.leaveParty());
     click('btn-copy', () => {
@@ -518,6 +524,39 @@ class App {
     $('rules-note').textContent = isHost ? (mode === 6 ? 'The ladder has 20 weapons; streaks and abilities are off.' : '') : 'Only the host can change match settings.';
   }
 
+  /** The pause menu's roster: both teams with their scores (or everyone, in modes without teams). */
+  private renderPauseTeams(): void {
+    const s = this.session, snap = s?.snap;
+    const box = $('pause-teams'), btn = $<HTMLButtonElement>('btn-switch-team');
+    if (!s || !snap) { box.innerHTML = ''; btn.hidden = true; return; }
+    const { P, H } = this.sim.L;
+    const info = MODES[s.start.mode];
+    const row = (r: Float32Array) => `<li class="${r[P.id] === s.selfId ? 'me' : ''}">${cardHtml(this.lookOf(r[P.id]), escapeHtml(this.hud.name_(r[P.id])), true)}<span></span><em>${r[P.kills]} kills · ${r[P.deaths]} deaths</em></li>`;
+    const byScore = (a: Float32Array, b: Float32Array) => b[P.score] - a[P.score];
+    let html: string;
+    if (info?.teams) {
+      const mine = s.local()[P.team];
+      const scores = [snap.hdr[H.score_a], snap.hdr[H.score_b]];
+      html = [0, 1].map(t => {
+        const players = snap.players.filter(r => r[P.team] === t).sort(byScore);
+        return `<div class="roster" style="--team:${TEAM_CSS[t]}"><h3>${TEAM_NAMES[t]}${t === mine ? ' (your team)' : ''}<b>${scores[t]}</b></h3><ul>${players.map(row).join('') || '<li class="empty">No players</li>'}</ul></div>`;
+      }).join('');
+      const count = (t: number) => snap.players.filter(r => r[P.team] === t).length;
+      const fair = (mine === 0 || mine === 1) && count(1 - mine) + 1 - (count(mine) - 1) <= 1;
+      // Only touch the button when something changed, so a click is never interrupted by a redraw.
+      const label = mine === 0 || mine === 1 ? `Switch to ${TEAM_NAMES[1 - mine]}` : 'Switch team';
+      const over = snap.hdr[H.phase] === 3;
+      if (btn.hidden !== over) btn.hidden = over;
+      if (btn.disabled === fair) btn.disabled = !fair;
+      if (btn.textContent !== label) btn.textContent = label;
+      btn.title = fair ? 'You respawn with your new team' : 'That would make the teams uneven';
+    } else {
+      html = `<div class="roster"><h3>${info?.name ?? 'Players'}</h3><ul>${[...snap.players].sort(byScore).map(row).join('')}</ul></div>`;
+      btn.hidden = true;
+    }
+    if (box.dataset.html !== html) { box.dataset.html = html; box.innerHTML = html; }
+  }
+
   private startParty(): void {
     if (!this.host) return;
     this.host.setLoadout(this.editor.loadout);
@@ -678,6 +717,7 @@ class App {
     if (now - this.lastHud >= 16) {
       this.lastHud = now;
       this.hud.update(s, this.input.scoreboard, p => this.scene?.project(p) ?? null);
+      if (this.screen === 'pause') this.renderPauseTeams();
       if (this.settings.showFps) $('fps').textContent = `${Math.round(this.meter.fps)} fps · ${this.meter.frameMs.toFixed(1)} ms${this.meter.displayHz ? ` · ${this.meter.displayHz} Hz display` : ''}`;
     }
   }

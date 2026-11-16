@@ -68,6 +68,8 @@ export class HostLobby {
   onCmd: (id: number, cmd: Float32Array) => void = () => {};
   /** A player left or was removed (also fires mid-match). */
   onLeave: (id: number) => void = () => {};
+  /** A guest asks to change sides during a match; return whether it was allowed. */
+  onTeam: (id: number, team: number) => boolean = () => false;
   /** A guest connected while a match is running. */
   onLateJoin: (id: number, loadout: number[], look: Look) => void = () => {};
 
@@ -140,7 +142,10 @@ export class HostLobby {
       else if (msg.t === 'name') member.name = this.uniqueName(cleanName(msg.name), member.id);
       else if (msg.t === 'look') member.look = cleanLook(msg.look);
       else if (msg.t === 'loadout') member.loadout = this.loadoutOf(msg.loadout);
-      else if (msg.t === 'team') { if (!this.inMatch && this.canSwitch(member, msg.team)) member.team = msg.team; }
+      else if (msg.t === 'team') {
+        if (msg.team !== 0 && msg.team !== 1) return;
+        if (this.inMatch ? this.onTeam(member.id, msg.team) : this.canSwitch(member, msg.team)) member.team = msg.team;
+      }
       else return;
       this.sync();
     };
@@ -211,6 +216,11 @@ export class HostLobby {
     if (this.inMatch) return;
     this.rules = cleanRules({ ...this.rules, ...rules }, this.mode);
     this.sync();
+  }
+  /** Records a side change the running match already made (so the lobby agrees afterwards). */
+  recordTeam(id: number, team: number) {
+    const m = this.members.get(id);
+    if (m && (team === 0 || team === 1)) { m.team = team; this.sync(); }
   }
   /** The host can put anyone on either team. */
   setTeam(id: number, team: number) {

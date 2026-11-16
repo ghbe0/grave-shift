@@ -38,6 +38,7 @@ pub const OB_CONFIRMED: f32 = 4.0; // player id, team
 pub const OB_DENIED: f32 = 5.0; // player id, team
 pub const OB_LADDER_UP: f32 = 6.0; // player id, stage
 pub const OB_LADDER_DOWN: f32 = 7.0; // player id, stage
+pub const OB_SWITCHED: f32 = 8.0; // player id, new team
 
 /// The weapon ladder, first rung to last: one kill moves you up a rung.
 pub const LADDER: [i32; 20] = [13, 2, 14, 3, 12, 11, 4, 6, 17, 15, 5, 16, 18, 7, 19, W_COMET, 1, 21, 20, W_PISTOL];
@@ -244,6 +245,30 @@ impl Game {
         let n0 = self.slots.iter().filter(|s| s.p.team == 0).count();
         let n1 = self.slots.iter().filter(|s| s.p.team == 1).count();
         (n1 < n0) as i32
+    }
+
+    /// Moves a player to the other team mid-match if that keeps the sides within one of each
+    /// other. They leave the field and respawn with their new team after the usual delay.
+    pub fn set_team(&mut self, id: i32, team: i32) -> bool {
+        if !self.authority || !self.teams() || !(team == 0 || team == 1) || self.phase == PH_OVER {
+            return false;
+        }
+        let Some(i) = self.idx(id) else { return false };
+        let cur = self.slots[i].p.team;
+        let count = |t: i32| self.slots.iter().filter(|s| s.p.team == t).count() as i32;
+        if cur == team || count(team) + 1 - (count(cur) - 1) > 1 {
+            return false;
+        }
+        let respawn = self.rules.respawn;
+        let p = &mut self.slots[i].p;
+        p.team = team;
+        if p.life == ALIVE {
+            p.life = DEAD;
+            p.health = 0.0;
+            p.respawn_t = respawn;
+        }
+        self.ev(EV_OBJ, &[OB_SWITCHED, id as f32, team as f32]);
+        true
     }
 
     /// Bookkeeping when slot `j` dies to slot `by` (-1: the world) in a multiplayer match.
@@ -533,6 +558,23 @@ mod tests {
         assert_eq!(g.slots[b].p.life, DEAD, "with friendly fire on it does");
         assert_eq!(g.obj.score, [0, 0], "team kills never score");
         assert_eq!(g.slots[a].p.kills, 0);
+    }
+
+    #[test]
+    fn players_can_change_sides_mid_match_if_it_stays_fair() {
+        let mut g = match_of(MODE_TDM, 1, &[(1, 0), (2, 0), (3, 1)]);
+        assert!(!g.set_team(3, 0), "3 v 0 is refused");
+        assert!(g.set_team(1, 1), "2 v 1 becomes 1 v 2");
+        assert_eq!((g.slots[0].p.team, g.slots[0].p.life, g.slots[0].p.deaths), (1, DEAD, 0));
+        assert!(!g.set_team(1, 1), "already there");
+        assert!(!g.set_team(1, 5) && !g.set_team(99, 0));
+        for _ in 0..(4.0 * 60.0) as usize {
+            g.step(1.0 / 60.0);
+        }
+        assert_eq!(g.slots[0].p.life, ALIVE, "back in with the new team");
+        assert_eq!(obj_events(&g, OB_SWITCHED), 1);
+        let mut ffa = match_of(MODE_SKIRMISH, 1, &[(1, 1), (2, 2)]);
+        assert!(!ffa.set_team(1, 0), "no teams in free-for-all");
     }
 
     #[test]

@@ -64,6 +64,7 @@ export class Session {
         this.queues.set(id, q);
       };
       host.onLeave = id => { this.game.removePlayer(id); this.queues.delete(id); };
+      host.onTeam = (id, team) => this.game.setTeam(id, team);
       host.onLateJoin = (id, loadout, look) => {
         // Late joiners in team modes go to the smaller team (the core picks it).
         this.game.addPlayer(id, MODES[start.mode]?.teams ? -1 : id, this.loadout(loadout));
@@ -72,6 +73,12 @@ export class Session {
       };
     }
     if (guest) guest.onFrame = f => this.receive(f);
+  }
+
+  /** Asks to change sides mid-match. Guests ask the host; the host and solo players switch at once. */
+  switchTeam(team: number): void {
+    if (this.guest) this.guest.setTeam(team);
+    else if (this.game.setTeam(this.selfId, team)) this.host?.recordTeam(this.selfId, team);
   }
 
   private loadout(l: number[]): number[] {

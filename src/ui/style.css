@@ -191,3 +191,17 @@ body.touch-play #center-low { top: 52%; font-size: 14px; }
 #markers .mk b { display: block; margin: 0 auto 2px; width: 22px; height: 22px; line-height: 22px; border-radius: 50%; border: 2px solid var(--team, #fff); background: #0009; color: #fff; }
 #markers .mk.ally { font-weight: 600; font-size: 11px; }
 body.touch-play #objective { top: 86px; transform: translateX(-50%) scale(0.8); transform-origin: top center; }
+
+/* Team rosters in the pause menu. */
+#pause-teams { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+#pause-teams:empty { display: none; }
+.roster { border: 1px solid var(--team, var(--line)); border-radius: 8px; overflow: hidden; background: #151a21; }
+.roster h3 { margin: 0; padding: 7px 10px; font-size: 14px; display: flex; justify-content: space-between; background: color-mix(in srgb, var(--team, #445) 28%, transparent); }
+.roster ul { list-style: none; margin: 0; padding: 6px; display: grid; gap: 4px; }
+.roster li { display: flex; align-items: center; gap: 8px; padding: 3px 4px; border-radius: 5px; }
+.roster li.me { background: #ffffff14; }
+.roster li span { flex: 1; }
+.roster li em { color: var(--dim); font-style: normal; font-size: 12px; white-space: nowrap; }
+.roster li.empty { color: var(--dim); font-size: 13px; }
+#scoreboard caption { font-weight: 700; padding: 6px; font-size: 16px; }
+#scoreboard tr[data-team] td:first-child { box-shadow: inset 3px 0 0 var(--team); }

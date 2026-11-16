@@ -100,6 +100,11 @@ pub extern "C" fn gs_set_rules(h: u32) {
     let d = input(modes::RULES_LEN as u32);
     with(h, |g| g.set_rules(modes::Rules::from_floats(g.mode, &d)));
 }
+/// Moves a player to the other team mid-match; returns 1 if it was allowed.
+#[no_mangle]
+pub extern "C" fn gs_set_team(h: u32, id: i32, team: i32) -> u32 {
+    with(h, |g| g.set_team(id, team) as u32)
+}
 /// Weapon ids of the weapon ladder, first rung to last.
 #[no_mangle]
 pub extern "C" fn gs_ladder() -> u32 {
