@@ -5,6 +5,7 @@
 import { Btn, CMD_LEN, decodeSnap, type Game, type MapInfo, type Sim, type Snap } from '../core/sim';
 import { SnapshotBuffer, type Pose } from '../netcode/interp';
 import type { GuestLobby, HostLobby, StartMsg } from '../netcode/lobby';
+import { MODES, rulesToFloats } from './rules';
 import { Predictor } from '../netcode/predict';
 import type { Input } from '../engine/input';
 
@@ -45,6 +46,7 @@ export class Session {
   constructor(private sim: Sim, readonly start: StartMsg, readonly selfId: number, private host: HostLobby | null, private guest: GuestLobby | null) {
     this.isGuest = !!guest;
     this.game = sim.newGame(start.map, start.mode, start.seed, !this.isGuest);
+    this.game.setRules(rulesToFloats(start.rules));
     this.game.setLocal(selfId);
     this.mapInfo = this.game.mapInfo();
     this.boxes = this.game.boxes();
@@ -63,8 +65,10 @@ export class Session {
       };
       host.onLeave = id => { this.game.removePlayer(id); this.queues.delete(id); };
       host.onLateJoin = (id, loadout, look) => {
-        this.game.addPlayer(id, id, this.loadout(loadout));
-        host.sendStart(id, { ...this.start, players: [...this.start.players, { id, team: id, loadout, look }] });
+        // Late joiners in team modes go to the smaller team (the core picks it).
+        this.game.addPlayer(id, MODES[start.mode]?.teams ? -1 : id, this.loadout(loadout));
+        const team = this.game.playerState(id)[sim.L.P.team] ?? id;
+        host.sendStart(id, { ...this.start, players: [...this.start.players, { id, team, loadout, look }] });
       };
     }
     if (guest) guest.onFrame = f => this.receive(f);

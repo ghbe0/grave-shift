@@ -3,6 +3,7 @@ import { decodeSnap, type Layout } from '../src/core/sim';
 import { lerpAngle, SnapshotBuffer } from '../src/netcode/interp';
 import { DEFAULT_LOOK } from '../src/game/look';
 import { GuestLobby, HostLobby } from '../src/netcode/lobby';
+import { cleanRules, defaultRules } from '../src/game/rules';
 import { codeFromUrl, generateCode, normalizeCode, partyLink } from '../src/netcode/party';
 import { LocalTransport } from '../src/netcode/transport';
 
@@ -130,22 +131,22 @@ describe('hostile peers', () => {
         link.sendCtl({
           t: 'welcome',
           id: 4,
-          lobby: { code: '<b>x</b>', players: [{ id: '1" onclick="x', name: '<img src=x onerror=alert(1)>', host: 'yes', ready: 1, look: { camo: 99, vest: -1, card: '<x>', emblem: 2 } }], map: 1e9, mode: -5, inMatch: 'true' },
+          lobby: { code: '<b>x</b>', players: [{ id: '1" onclick="x', name: '<img src=x onerror=alert(1)>', host: 'yes', ready: 1, look: { camo: 99, vest: -1, card: '<x>', emblem: 2 }, team: 7 }], map: 1e9, mode: -5, rules: { timeLimit: -1, health: 1e9, friendlyFire: 'yes' }, inMatch: 'true' },
         });
         sendStart = m => link.sendCtl(m);
       };
     };
     const guest = await GuestLobby.join(t, code, 'Ann', 'tok', loadout);
     expect(guest.selfId).toBe(4);
-    expect(guest.state).toEqual({ code: 'BXB', players: [{ id: 0, name: 'img srcx onerror', host: false, ready: false, look: { ...DEFAULT_LOOK, emblem: 2 } }], map: 0, mode: 0, inMatch: false });
+    expect(guest.state).toEqual({ code: 'BXB', players: [{ id: 0, name: 'img srcx onerror', host: false, ready: false, look: { ...DEFAULT_LOOK, emblem: 2 }, team: -1 }], map: 0, mode: 0, rules: defaultRules(0), inMatch: false });
     let started: unknown;
     guest.onStart = m => (started = m);
-    sendStart({ t: 'start', map: 'x', mode: 99, seed: NaN, players: [{ id: -1, team: 'a', loadout: ['x', 1e9, 3] }, ...Array(50).fill({})] });
+    sendStart({ t: 'start', map: 'x', mode: 99, seed: NaN, rules: { scoreLimit: 12345, respawn: '3', abilities: 0 }, players: [{ id: -1, team: 'a', loadout: ['x', 1e9, 3] }, ...Array(50).fill({})] });
     await tick();
-    expect(started).toMatchObject({ t: 'start', map: 0, mode: 0, seed: 1 });
+    expect(started).toMatchObject({ t: 'start', map: 0, mode: 0, seed: 1, rules: defaultRules(0) });
     const s = started as { players: { id: number; team: number; loadout: number[] }[] };
     expect(s.players.length).toBe(16);
-    expect(s.players[0]).toEqual({ id: 0, team: 0, loadout: [-1, -1, 3], look: DEFAULT_LOOK });
+    expect(s.players[0]).toEqual({ id: 0, team: -1, loadout: [-1, -1, 3], look: DEFAULT_LOOK });
     guest.close();
     ep.close();
   });
@@ -219,6 +220,79 @@ describe('customization over the network', () => {
     expect(host.state.players[1].look).toMatchObject({ camo: 4, emblem: 5, vest: 0 });
     const msg = host.start(1);
     expect(msg.players.map(p => p.look.camo)).toEqual([7, 4]);
+    host.close();
+  });
+});
+
+describe('teams and match settings', () => {
+  const loadout = [3, 0, 4];
+  it('splits players into even teams, lets them switch sides fairly and syncs the settings', async () => {
+    const t = new LocalTransport();
+    const host = await HostLobby.create(t, 'Host', loadout, 2);
+    const guests = [];
+    for (const n of ['Ann', 'Bo', 'Cy']) guests.push(await GuestLobby.join(t, host.code, n, `tok-${n}`, loadout));
+    await tick();
+    expect(host.state.players.map(p => p.team)).toEqual([-1, -1, -1, -1]);
+
+    host.setMode(2); // Team Deathmatch
+    await tick();
+    expect(host.state.players.map(p => p.team)).toEqual([0, 1, 0, 1]);
+    expect(guests[0].state.players.map(p => p.team)).toEqual([0, 1, 0, 1]);
+    expect(host.state.rules).toEqual(defaultRules(2));
+
+    // Bo (team 0) asking to join team 1 would make it 1 v 3: refused.
+    guests[1].setTeam(1);
+    await tick();
+    expect(host.state.players[2].team).toBe(0);
+    // The host can move anyone; then the same request is fair and accepted.
+    host.setTeam(3, 0);
+    await tick();
+    expect(host.state.players.map(p => p.team)).toEqual([0, 1, 0, 0]);
+    guests[1].setTeam(1);
+    await tick();
+    expect(host.state.players.map(p => p.team)).toEqual([0, 1, 1, 0]);
+    guests[1].setTeam(7); // not a team
+    await tick();
+    expect(host.state.players[2].team).toBe(1);
+
+    // Settings: menu values only; anything else falls back to the mode's default.
+    host.setRules({ scoreLimit: 50, timeLimit: 300, friendlyFire: true, health: 2 });
+    await tick();
+    expect(guests[2].state.rules).toMatchObject({ scoreLimit: 50, timeLimit: 300, friendlyFire: true, health: 2 });
+    host.setRules({ scoreLimit: 51, respawn: -4 });
+    expect(host.state.rules).toMatchObject({ scoreLimit: 75, respawn: 3, timeLimit: 300 });
+
+    // A newcomer joins the smaller team (the first one on a tie).
+    host.setTeam(3, 1);
+    await tick();
+    expect(host.state.players.map(p => p.team)).toEqual([0, 1, 1, 1]);
+    const late = await GuestLobby.join(t, host.code, 'Dee', 'tok-dee', loadout);
+    await tick();
+    expect(late.state.players.at(-1)!.team).toBe(0);
+    expect([0, 1].map(k => host.state.players.filter(p => p.team === k).length)).toEqual([2, 3]);
+
+    const msg = host.start(5);
+    await tick();
+    expect(msg.rules).toEqual(host.state.rules);
+    expect(msg.players.map(p => p.team)).toEqual([0, 1, 1, 1, 0]);
+    for (const g of guests) g.close();
+    late.close();
+    host.close();
+  });
+
+  it('switching modes resets the settings and leaves teams only where they belong', async () => {
+    const t = new LocalTransport();
+    const host = await HostLobby.create(t, 'Host', loadout, 2);
+    host.setMode(3);
+    host.setRules({ scoreLimit: 300 });
+    expect(host.state.rules.scoreLimit).toBe(300);
+    host.setMode(1); // free-for-all: no teams
+    expect(host.state.rules).toEqual(defaultRules(1));
+    expect(host.state.players[0].team).toBe(-1);
+    const msg = host.start(1);
+    expect(msg.players[0].team).toBe(0); // the player's id: everyone for themselves
+    expect(cleanRules({ timeLimit: 0, scoreLimit: 0 }, 1)).toMatchObject({ timeLimit: 0, scoreLimit: 0 });
+    expect(cleanRules({ timeLimit: 300 }, 0).timeLimit).toBe(0); // survival has no clock
     host.close();
   });
 });

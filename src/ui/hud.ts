@@ -2,6 +2,11 @@
 import type { Sim, Snap } from '../core/sim';
 import { cardHtml, COLORS, DEFAULT_LOOK, reticleSvg, type Look } from '../game/look';
 import type { Session } from '../game/session';
+import { LADDER_RUNGS, MODES, TEAM_CSS, TEAM_NAMES } from '../game/rules';
+
+/** Where a world point is on screen (0..1), or null when it is behind the camera. */
+export type Project = (p: ArrayLike<number>) => [number, number] | null;
+const ZONE_NAMES = ['A', 'B', 'C'];
 
 const $ = (id: string) => document.getElementById(id)!;
 const INTERACT = ['', 'door', 'wallbuy', 'perk', 'crate', 'bench', 'tonic', 'power', 'workbench', 'part', 'console', 'barricade', 'revive'];
@@ -31,6 +36,29 @@ export class Hud {
   private name(id: number): string { return this.names.get(id) ?? `Player ${id + 1}`; }
   say(text: string, secs = 4): void { this.feed.push({ text, until: performance.now() + secs * 1000 }); if (this.feed.length > 5) this.feed.shift(); }
   announce(text: string, secs = 3): void { this.banner = { text, until: performance.now() + secs * 1000 }; }
+
+  private myTeam(s: Session): number {
+    const { P } = this.sim.L;
+    return s.local()[P.team] ?? -1;
+  }
+  /** Objective news (EV_OBJ, `modes.rs` OB_*). */
+  private objective(e: Float32Array, s: Session): void {
+    const mine = this.myTeam(s), me = s.selfId;
+    const team = (t: number) => (t === mine ? `Your team (${TEAM_NAMES[t]})` : TEAM_NAMES[t] ?? '');
+    switch (e[1]) {
+      case 1: this.say(`${team(e[3])} took zone ${ZONE_NAMES[e[2]]}`); if (e[3] === mine) this.announce(`Zone ${ZONE_NAMES[e[2]]} secured`, 2); break;
+      case 2: this.say(`${team(e[3])} neutralised zone ${ZONE_NAMES[e[2]]}`); break;
+      case 3: this.announce('The hill has moved', 3); break;
+      case 4: if (e[2] === me) this.announce('Tag confirmed', 1.5); else this.say(`${this.name(e[2])} confirmed a kill`); break;
+      case 5: if (e[2] === me) this.announce('Tag denied', 1.5); else this.say(`${this.name(e[2])} denied a kill`); break;
+      case 6: case 7: {
+        if (e[2] !== me) { if (e[1] === 7) this.say(`${this.name(e[2])} was knocked down a rung`); break; }
+        const w = this.sim.catalog.weapons[this.sim.catalog.ladder[e[3]]];
+        this.announce(e[1] === 7 ? 'Knifed! Down a rung' : w ? `Rung ${e[3] + 1}: ${w.name}` : 'Ladder complete!', 2);
+        break;
+      }
+    }
+  }
 
   /** Turns simulation events into feed lines, banners and hit markers. */
   handleEvent(e: Float32Array, s: Session): void {
@@ -62,7 +90,16 @@ export class Hud {
       case V.tonic: if (e[1] === me && !e[3]) this.say(`Tonic: ${cat.tonics[e[2]]?.name} - ${cat.tonics[e[2]]?.desc}`, 6); break;
       case V.ability: if (e[1] !== me) this.say(`${this.name(e[1])} used ${cat.abilities[e[2]]?.name}`); break;
       case V.streak: this.say(`${this.name(e[1])} called ${cat.streaks[e[2]]?.name}`); break;
-      case V.gameover: this.announce(s.start.mode === 0 ? `Overrun on round ${e[2]}` : `${this.name(e[1])} wins`, 60); break;
+      case V.gameover: {
+        // Multiplayer: [winner id, score, winning team, draw].
+        const text = s.start.mode === 0 ? `Overrun on round ${e[2]}`
+          : e[4] ? 'Draw'
+          : e[3] >= 0 ? `${TEAM_NAMES[e[3]]} win${this.myTeam(s) === e[3] ? ' - victory!' : ''}`
+          : e[1] === me ? 'You win!' : `${this.name(e[1])} wins`;
+        this.announce(text, 60);
+        break;
+      }
+      case V.obj: this.objective(e, s); break;
     }
   }
 
@@ -95,7 +132,7 @@ export class Hud {
     return '';
   }
 
-  update(s: Session, scoreboard: boolean): void {
+  update(s: Session, scoreboard: boolean, project?: Project): void {
     const snap = s.snap;
     const p = s.local();
     if (!snap || !p.length) { $('hud').hidden = true; return; }
@@ -124,8 +161,16 @@ export class Hud {
     $('ability').classList.toggle('ready', p[P.charge] >= 1 || active);
     $('ability-name').textContent = ab ? `${ab.name}${p[P.charge] >= 1 ? ' [Q]' : ''}` : '';
 
-    $('points').textContent = survival ? `${p[P.points]}` : `${p[P.kills]} / ${hdr[H.score_limit]}`;
-    $('round').textContent = survival ? `${hdr[H.round] || ''}` : fmtTime(hdr[H.timer]);
+    const mode = s.start.mode, info = MODES[mode];
+    const limit = hdr[H.score_limit];
+    $('points').textContent = survival ? `${p[P.points]}`
+      : mode === 6 ? `Rung ${Math.min(p[P.stage] + 1, LADDER_RUNGS)} / ${LADDER_RUNGS}`
+      : info?.teams ? `${p[P.score]}`
+      : `${p[P.kills]}${limit ? ` / ${limit}` : ''}`;
+    // No time limit: the clock counts up instead.
+    $('round').textContent = survival ? `${hdr[H.round] || ''}` : hdr[H.timer] < 0 ? fmtTime(hdr[H.time]) : fmtTime(hdr[H.timer]);
+    this.objectiveBar(s, snap, p);
+    this.markers(s, snap, project);
     $('left').textContent = survival ? (hdr[H.phase] === 1 ? `${hdr[H.left]} left` : hdr[H.phase] === 3 ? '' : `Next round in ${Math.ceil(hdr[H.timer])}`) : hdr[H.phase] === 0 ? `Starting in ${Math.ceil(hdr[H.timer])}` : '';
 
     const perks = cat.perks.filter(k => p[P.perks] & (1 << k.id)).map(k => `<span class="chip" title="${k.desc}">${k.name}</span>`);
@@ -177,16 +222,97 @@ export class Hud {
 
     $('scoreboard').hidden = !scoreboard && hdr[H.phase] !== 3;
     if (!$('scoreboard').hidden) {
-      const rows = [...snap.players].sort((a, b) => (survival ? b[P.score] - a[P.score] : b[P.kills] - a[P.kills])).map(r =>
-        `<tr class="${r[P.id] === s.selfId ? 'me' : ''}"><td>${cardHtml(this.lookOf(r[P.id]), escapeHtml(this.name(r[P.id])), true)}</td><td>${survival ? r[P.points] : r[P.score]}</td><td>${r[P.kills]}</td><td>${survival ? r[P.headshots] : r[P.deaths]}</td><td>${survival ? r[P.deaths] : ''}</td></tr>`);
-      setHtml('scoreboard', `<table><tr><th>${cat.maps[s.start.map].name}</th><th>${survival ? 'Points' : 'Score'}</th><th>Kills</th><th>${survival ? 'Headshots' : 'Deaths'}</th><th>${survival ? 'Downs' : ''}</th></tr>${rows.join('')}</table>`);
+      const teams = !!info?.teams;
+      // Last column: what the mode is about (downs in survival, objectives, or the ladder rung).
+      const extra = survival ? 'Downs' : mode === 6 ? 'Rung' : mode === 3 ? 'Captures' : mode === 4 ? 'Hill secs' : mode === 5 ? 'Tags' : '';
+      const extraOf = (r: Float32Array) => survival ? r[P.deaths] : mode === 6 ? Math.min(r[P.stage] + 1, LADDER_RUNGS) : extra ? r[P.objs] : '';
+      const key = (r: Float32Array) => survival ? r[P.score] : mode === 6 ? r[P.stage] * 1000 + r[P.kills] : teams ? r[P.score] : r[P.kills];
+      const sorted = [...snap.players].sort((a, b) => (teams ? a[P.team] - b[P.team] : 0) || key(b) - key(a));
+      const rows = sorted.map(r => {
+        const side = teams ? ` style="--team:${TEAM_CSS[r[P.team]] ?? '#fff'}" data-team="${r[P.team]}"` : '';
+        return `<tr class="${r[P.id] === s.selfId ? 'me' : ''}"${side}><td>${cardHtml(this.lookOf(r[P.id]), escapeHtml(this.name(r[P.id])), true)}</td><td>${survival ? r[P.points] : r[P.score]}</td><td>${r[P.kills]}</td><td>${survival ? r[P.headshots] : r[P.deaths]}</td><td>${extraOf(r)}</td></tr>`;
+      });
+      const head = teams ? `<caption>${TEAM_NAMES[0]} ${hdr[H.score_a]} - ${hdr[H.score_b]} ${TEAM_NAMES[1]}</caption>` : '';
+      setHtml('scoreboard', `<table>${head}<tr><th>${cat.maps[s.start.map].name} · ${info?.name ?? ''}</th><th>${survival ? 'Points' : 'Score'}</th><th>Kills</th><th>${survival ? 'Headshots' : 'Deaths'}</th><th>${extra}</th></tr>${rows.join('')}</table>`);
     }
 
     // Recon Ping: mark enemies through walls for the caller.
     const marks = p[P.ping_t] > 0 ? snap.players.filter(r => r[P.id] !== s.selfId && r[P.life] === 0).length : 0;
     $('ping').textContent = marks ? `Recon Ping: ${marks} hostile${marks > 1 ? 's' : ''} on the map` : '';
   }
+
+  /** Team scores, zones, the hill or the race for the top, along the top of the screen. */
+  objectiveBar(s: Session, snap: NonNullable<Session['snap']>, p: Float32Array): void {
+    const { P, H, E } = this.sim.L;
+    const mode = s.start.mode, info = MODES[mode], hdr = snap.hdr;
+    if (!info || mode === 0) { setHtml('objective', ''); return; }
+    const limit = hdr[H.score_limit];
+    const mine = p[P.team];
+    const side = (t: number, score: number) => `<div class="side${t === mine ? ' mine' : ''}" style="--team:${TEAM_CSS[t]}"><small>${TEAM_NAMES[t]}</small>${score}</div>`;
+    const parts: string[] = [];
+    if (info.teams) {
+      parts.push(side(0, hdr[H.score_a]));
+      if (mode === 3) {
+        const zones = snap.ents.filter(e => e[E.kind] >= 40 && e[E.kind] <= 42).sort((a, b) => a[E.kind] - b[E.kind]);
+        for (const z of zones) {
+          const { owner, contested, prog } = zoneOf(z[E.a]);
+          const fill = prog < 0 ? TEAM_CSS[0] : TEAM_CSS[1];
+          parts.push(`<div class="zone${contested ? ' contested' : ''}" style="--team:${owner >= 0 ? TEAM_CSS[owner] : '#ddd'};--fill:${fill};--p:${Math.abs(prog).toFixed(2)}">${ZONE_NAMES[z[E.kind] - 40]}</div>`);
+        }
+      } else if (mode === 4) {
+        const hill = snap.ents.find(e => e[E.kind] === 45);
+        const st = hill ? zoneOf(hill[E.a]) : null;
+        const who = !st ? '' : st.contested ? 'Contested' : st.owner >= 0 ? `${TEAM_NAMES[st.owner]} hold the hill` : 'Hill empty';
+        parts.push(`<div class="info">${who} · moves in ${fmtTime(hdr[H.obj_t])}</div>`);
+      } else {
+        parts.push(`<div class="info">${limit ? `First to ${limit}` : 'No score limit'}</div>`);
+      }
+      parts.push(side(1, hdr[H.score_b]));
+    } else {
+      // Free-for-all and the ladder: you against the leader.
+      const key = (r: Float32Array) => (mode === 6 ? r[P.stage] : r[P.kills]);
+      const others = snap.players.filter(r => r[P.id] !== s.selfId);
+      const lead = others.reduce<Float32Array | null>((b, r) => (!b || key(r) > key(b) ? r : b), null);
+      const unit = mode === 6 ? 'rung' : 'kills';
+      const mineKey = mode === 6 ? Math.min(p[P.stage] + 1, LADDER_RUNGS) : p[P.kills];
+      parts.push(`<div class="info">You ${mineKey}${mode === 6 ? ` / ${LADDER_RUNGS}` : ''} ${unit}${lead ? ` · Leader ${escapeHtml(this.name(lead[P.id]))} ${mode === 6 ? Math.min(lead[P.stage] + 1, LADDER_RUNGS) : key(lead)}` : ''}${mode !== 6 && limit ? ` · First to ${limit}` : ''}</div>`);
+    }
+    setHtml('objective', parts.join(''));
+  }
+
+  /** Floating labels: zone letters, the hill, and teammates' names. */
+  private markers(s: Session, snap: NonNullable<Session['snap']>, project?: Project): void {
+    const { P, E } = this.sim.L;
+    const mode = s.start.mode, info = MODES[mode];
+    if (!project || !info || mode === 0) { setHtml('markers', ''); return; }
+    const out: string[] = [];
+    const me = s.local();
+    const myPos = [me[P['ctl.pos']], me[P['ctl.pos'] + 1], me[P['ctl.pos'] + 2]];
+    const place = (pos: number[], html: string, cls: string, color: string) => {
+      const at = project(pos);
+      if (!at || at[0] < -0.05 || at[0] > 1.05 || at[1] < -0.05 || at[1] > 1.05) return;
+      const dist = Math.hypot(pos[0] - myPos[0], pos[2] - myPos[2]);
+      out.push(`<div class="mk ${cls}" style="left:${(at[0] * 100).toFixed(2)}%;top:${(at[1] * 100).toFixed(2)}%;--team:${color}">${html}${cls === 'obj' ? `<br>${Math.round(dist)} m` : ''}</div>`);
+    };
+    for (const e of snap.ents) {
+      const k = e[E.kind];
+      if (k < 40 || k > 45) continue;
+      const { owner } = zoneOf(e[E.a]);
+      const label = k === 45 ? 'H' : ZONE_NAMES[k - 40];
+      place([e[E.pos], e[E.pos + 1] + 3.2, e[E.pos + 2]], `<b>${label}</b>`, 'obj', owner >= 0 ? TEAM_CSS[owner] : '#ddd');
+    }
+    if (info.teams) {
+      const mine = me[P.team];
+      for (const pl of s.players()) {
+        if (pl.id === s.selfId || pl.rec[P.team] !== mine || pl.rec[P.life] !== 0) continue;
+        place([pl.x, pl.y + 2.15, pl.z], escapeHtml(this.name(pl.id)), 'ally', TEAM_CSS[mine]);
+      }
+    }
+    setHtml('markers', out.join(''));
+  }
 }
+
+const zoneOf = (a: number) => { const q = Math.floor(a / 4); return { owner: Math.floor(q / 2) - 1, contested: q % 2 === 1, prog: a - q * 4 - 1 }; };
 
 const cache = new Map<string, string>();
 /** Only touches the DOM when the markup actually changed. */

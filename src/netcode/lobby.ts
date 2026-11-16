@@ -2,21 +2,21 @@
 // start the match, or remove players; guests receive the state and send their name, loadout and
 // ready flag. The same two classes also relay match traffic (commands up, snapshots down).
 import { cleanLook, DEFAULT_LOOK, type Look } from '../game/look';
+import { cleanRules, defaultRules, MODES, type Rules } from '../game/rules';
 import { generateCode } from './party';
 import { NetError, type HostEndpoint, type Link, type Transport } from './transport';
 
-export const PROTOCOL = 2;
-export const MODES = [
-  { id: 0, name: 'Survival', max: 4, desc: 'Co-op against endless rounds' },
-  { id: 1, name: 'Skirmish', max: 8, desc: 'Free-for-all, first to 25' },
-];
+export { MODES };
+export const PROTOCOL = 3;
 
-export interface LobbyPlayer { id: number; name: string; host: boolean; ready: boolean; look: Look }
-export interface LobbyState { code: string; players: LobbyPlayer[]; map: number; mode: number; inMatch: boolean }
-export interface StartMsg { t: 'start'; map: number; mode: number; seed: number; players: { id: number; team: number; loadout: number[]; look: Look }[] }
+/** `team` is 0 or 1 in team modes, -1 otherwise. */
+export interface LobbyPlayer { id: number; name: string; host: boolean; ready: boolean; look: Look; team: number }
+export interface LobbyState { code: string; players: LobbyPlayer[]; map: number; mode: number; rules: Rules; inMatch: boolean }
+/** Players' `team`: 0 or 1 in team modes (-1 lets the simulation balance), the player id otherwise. */
+export interface StartMsg { t: 'start'; map: number; mode: number; seed: number; rules: Rules; players: { id: number; team: number; loadout: number[]; look: Look }[] }
 export type KickReason = 'kicked' | 'banned' | 'full' | 'version' | 'host-left';
 
-interface Member { id: number; name: string; token: string; ready: boolean; loadout: number[]; look: Look; link: Link | null; budget: number; refilled: number; strikes: number }
+interface Member { id: number; name: string; token: string; ready: boolean; loadout: number[]; look: Look; team: number; link: Link | null; budget: number; refilled: number; strikes: number }
 
 const cleanName = (n: unknown) => (typeof n === 'string' ? n.replace(/[^\p{L}\p{N} _.-]/gu, '').trim().slice(0, 16) : '') || 'Player';
 const int = (v: unknown, lo: number, hi: number, fallback = lo) => (Number.isInteger(v) && (v as number) >= lo && (v as number) <= hi ? (v as number) : fallback);
@@ -29,24 +29,28 @@ const KICK_REASONS: KickReason[] = ['kicked', 'banned', 'full', 'version', 'host
  */
 export function cleanLobbyState(raw: any): LobbyState | null {
   if (!raw || typeof raw !== 'object' || !Array.isArray(raw.players)) return null;
+  const mode = int(raw.mode, 0, MODES.length - 1);
   return {
     code: typeof raw.code === 'string' ? raw.code.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6) : '',
-    players: raw.players.slice(0, 16).map((p: any) => ({ id: int(p?.id, 0, 1e6), name: cleanName(p?.name), host: p?.host === true, ready: p?.ready === true, look: cleanLook(p?.look) })),
+    players: raw.players.slice(0, 16).map((p: any) => ({ id: int(p?.id, 0, 1e6), name: cleanName(p?.name), host: p?.host === true, ready: p?.ready === true, look: cleanLook(p?.look), team: int(p?.team, -1, 1, -1) })),
     map: int(raw.map, 0, 63),
-    mode: int(raw.mode, 0, MODES.length - 1),
+    mode,
+    rules: cleanRules(raw.rules, mode),
     inMatch: raw.inMatch === true,
   };
 }
 export function cleanStart(raw: any): StartMsg {
   const players = Array.isArray(raw?.players) ? raw.players.slice(0, 16) : [];
+  const mode = int(raw?.mode, 0, MODES.length - 1);
   return {
     t: 'start',
     map: int(raw?.map, 0, 63),
-    mode: int(raw?.mode, 0, MODES.length - 1),
+    mode,
     seed: int(raw?.seed, -(2 ** 31), 2 ** 31 - 1, 1),
+    rules: cleanRules(raw?.rules, mode),
     players: players.map((p: any) => ({
       id: int(p?.id, 0, 1e6),
-      team: int(p?.team, 0, 1e6),
+      team: int(p?.team, -1, 1e6, -1),
       loadout: Array.isArray(p?.loadout) ? p.loadout.slice(0, 32).map((v: unknown) => int(v, -1, 1000, -1)) : [],
       look: cleanLook(p?.look),
     })),
@@ -73,10 +77,11 @@ export class HostLobby {
   private nextId = 1;
   private map = 0;
   private mode = 0;
+  private rules: Rules = defaultRules(0);
   private inMatch = false;
 
   private constructor(readonly code: string, private endpoint: HostEndpoint, name: string, loadout: number[], private mapCount: number, look: Look) {
-    this.members.set(0, { id: 0, name: cleanName(name), token: '', ready: true, loadout, look: cleanLook(look), link: null, budget: MSG_BURST, refilled: 0, strikes: 0 });
+    this.members.set(0, { id: 0, name: cleanName(name), token: '', ready: true, loadout, look: cleanLook(look), team: -1, link: null, budget: MSG_BURST, refilled: 0, strikes: 0 });
     endpoint.onLink = link => this.accept(link);
   }
 
@@ -95,9 +100,10 @@ export class HostLobby {
   get state(): LobbyState {
     return {
       code: this.code,
-      players: [...this.members.values()].map(m => ({ id: m.id, name: m.name, host: m.id === 0, ready: m.ready, look: m.look })),
+      players: [...this.members.values()].map(m => ({ id: m.id, name: m.name, host: m.id === 0, ready: m.ready, look: m.look, team: m.team })),
       map: this.map,
       mode: this.mode,
+      rules: { ...this.rules },
       inMatch: this.inMatch,
     };
   }
@@ -114,7 +120,7 @@ export class HostLobby {
         const token = String(msg.token ?? '').slice(0, 64);
         if (this.banned.has(token)) return reject('banned');
         if (this.members.size >= this.maxPlayers) return reject('full');
-        member = { id: this.nextId++, name: this.uniqueName(cleanName(msg.name)), token, ready: false, loadout: this.loadoutOf(msg.loadout), look: cleanLook(msg.look), link, budget: MSG_BURST, refilled: performance.now(), strikes: 0 };
+        member = { id: this.nextId++, name: this.uniqueName(cleanName(msg.name)), token, ready: false, loadout: this.loadoutOf(msg.loadout), look: cleanLook(msg.look), team: this.smallerTeam(), link, budget: MSG_BURST, refilled: performance.now(), strikes: 0 };
         this.members.set(member.id, member);
         link.sendCtl({ t: 'welcome', id: member.id, lobby: this.state });
         if (this.inMatch) this.onLateJoin(member.id, member.loadout, member.look);
@@ -134,11 +140,26 @@ export class HostLobby {
       else if (msg.t === 'name') member.name = this.uniqueName(cleanName(msg.name), member.id);
       else if (msg.t === 'look') member.look = cleanLook(msg.look);
       else if (msg.t === 'loadout') member.loadout = this.loadoutOf(msg.loadout);
+      else if (msg.t === 'team') { if (!this.inMatch && this.canSwitch(member, msg.team)) member.team = msg.team; }
       else return;
       this.sync();
     };
     link.onRt = data => { if (member && this.inMatch) this.onCmd(member.id, data); };
     link.onClose = () => { if (member && this.members.get(member.id) === member) this.drop(member.id); };
+  }
+
+  private get teams(): boolean { return MODES[this.mode].teams; }
+  private count(team: number): number { return [...this.members.values()].filter(m => m.team === team).length; }
+  /** The team a newcomer joins: the smaller one (-1 when the mode has no teams). */
+  private smallerTeam(): number { return this.teams ? (this.count(1) < this.count(0) ? 1 : 0) : -1; }
+  /** A player may change sides if it does not leave the teams more than one apart. */
+  private canSwitch(m: Member, team: unknown): team is number {
+    return this.teams && (team === 0 || team === 1) && team !== m.team && this.count(team) + 1 - (this.count(m.team) - 1) <= 1;
+  }
+  /** Splits everyone into two even teams in join order (after switching to a team mode). */
+  private balance() {
+    let n = 0;
+    for (const m of this.members.values()) m.team = this.teams ? n++ % 2 : -1;
   }
 
   private loadoutOf(l: unknown): number[] {
@@ -176,10 +197,26 @@ export class HostLobby {
   }
   setMap(map: number) { if (!this.inMatch && map >= 0 && map < this.mapCount) { this.map = map; this.sync(); } }
   setMode(mode: number) {
-    if (this.inMatch || !MODES[mode]) return;
+    if (this.inMatch || !MODES[mode] || mode === this.mode) return;
+    const hadTeams = this.teams;
     this.mode = mode;
+    this.rules = defaultRules(mode);
     // Shrinking the party size removes the most recent joiners.
     for (const m of [...this.members.values()].slice(MODES[mode].max)) this.remove(m.id, 'full');
+    if (this.teams !== hadTeams) this.balance();
+    this.sync();
+  }
+  /** Match settings; anything not on the menu falls back to the mode's default. */
+  setRules(rules: Partial<Rules>) {
+    if (this.inMatch) return;
+    this.rules = cleanRules({ ...this.rules, ...rules }, this.mode);
+    this.sync();
+  }
+  /** The host can put anyone on either team. */
+  setTeam(id: number, team: number) {
+    const m = this.members.get(id);
+    if (!m || this.inMatch || !this.teams || (team !== 0 && team !== 1)) return;
+    m.team = team;
     this.sync();
   }
 
@@ -201,7 +238,10 @@ export class HostLobby {
   /** Starts the match for everyone in the lobby. */
   start(seed: number = (Math.random() * 2 ** 31) | 0): StartMsg {
     this.inMatch = true;
-    const msg: StartMsg = { t: 'start', map: this.map, mode: this.mode, seed, players: [...this.members.values()].map(m => ({ id: m.id, team: m.id, loadout: m.loadout, look: m.look })) };
+    const msg: StartMsg = {
+      t: 'start', map: this.map, mode: this.mode, seed, rules: { ...this.rules },
+      players: [...this.members.values()].map(m => ({ id: m.id, team: this.teams ? m.team : m.id, loadout: m.loadout, look: m.look })),
+    };
     this.broadcastCtl(msg);
     this.sync();
     return msg;
@@ -282,6 +322,8 @@ export class GuestLobby {
   /** Asks the host to rename this player; the host cleans it and keeps names unique. */
   setName(name: string) { this.link.sendCtl({ t: 'name', name }); }
   setLook(look: Look) { this.link.sendCtl({ t: 'look', look }); }
+  /** Asks to change sides (team modes); the host refuses moves that unbalance the teams. */
+  setTeam(team: number) { this.link.sendCtl({ t: 'team', team }); }
   sendCmd(cmd: Float32Array) { this.link.sendRt(cmd); }
   close() { this.gone = true; this.link.close(); }
 }

@@ -9,6 +9,7 @@ pub mod game;
 pub mod loadout;
 pub mod maps;
 pub mod math;
+pub mod modes;
 pub mod survival;
 pub mod texgen;
 pub mod util;
@@ -92,6 +93,22 @@ pub extern "C" fn gs_free(h: u32) {
             *s = None;
         }
     });
+}
+/// Match rules (`modes::RULES_LEN` floats) are read from the io buffer and clamped.
+#[no_mangle]
+pub extern "C" fn gs_set_rules(h: u32) {
+    let d = input(modes::RULES_LEN as u32);
+    with(h, |g| g.set_rules(modes::Rules::from_floats(g.mode, &d)));
+}
+/// Weapon ids of the weapon ladder, first rung to last.
+#[no_mangle]
+pub extern "C" fn gs_ladder() -> u32 {
+    out(&modes::LADDER.map(|w| w as f32))
+}
+/// Default rules for a mode, written to the io buffer.
+#[no_mangle]
+pub extern "C" fn gs_default_rules(mode: u32) -> u32 {
+    out(&modes::Rules::defaults(mode as u8).to_floats())
 }
 /// Loadout (27 floats) is read from the io buffer.
 #[no_mangle]

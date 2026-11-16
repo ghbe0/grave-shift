@@ -49,6 +49,8 @@ export interface Catalog {
   tonics: (Item & { kind: number; amount: number; rare: boolean })[];
   mods: string[];
   powerups: string[];
+  /** Weapon ladder, first rung to last (weapon ids). */
+  ladder: number[];
   maps: { id: number; name: string; zones: string[]; doors: string[]; props: string[]; quests: { name: string; steps: string[] }[] }[];
 }
 
@@ -124,6 +126,7 @@ export class Sim {
       tonics: list(Kind.tonic, id => ({ kind: this.stat(Kind.tonic, id, 0), amount: this.stat(Kind.tonic, id, 1), rare: this.stat(Kind.tonic, id, 2) > 0 })),
       mods: Array.from({ length: this.count(Kind.mod) }, (_, i) => this.str(Kind.mod, i)),
       powerups: Array.from({ length: this.count(Kind.powerup) }, (_, i) => this.str(Kind.powerup, i)),
+      ladder: Array.from(this.take(this.x.gs_ladder())),
       maps: Array.from({ length: this.count(Kind.map) }, (_, id) => ({
         id,
         name: this.str(Kind.map, id),
@@ -163,6 +166,9 @@ export class Sim {
   zombieCount(round: number, players: number): number { return this.x.gs_zombie_count(round, players); }
   hordeCap(players: number): number { return this.x.gs_horde_cap(players); }
 
+  /** The core's default rules for a mode, in `rulesToFloats` order. */
+  defaultRules(mode: number): number[] { return Array.from(this.take(this.x.gs_default_rules(mode))); }
+
   newGame(map: number, mode: number, seed: number, authority: boolean): Game {
     return new Game(this, this.x, this.x.gs_new(map, mode, seed >>> 0, authority ? 1 : 0), map, mode);
   }
@@ -173,6 +179,8 @@ export class Game {
   constructor(readonly sim: Sim, private x: X, private h: number, readonly map: number, readonly mode: number) {}
   free(): void { this.x.gs_free(this.h); }
   addPlayer(id: number, team: number, loadout: ArrayLike<number>): void { this.sim.io.set(loadout); this.x.gs_add_player(this.h, id, team); }
+  /** Match rules as numbers (see `rulesToFloats`); the core clamps them. */
+  setRules(rules: ArrayLike<number>): void { this.sim.io.set(rules); this.x.gs_set_rules(this.h); }
   removePlayer(id: number): void { this.x.gs_remove_player(this.h, id); }
   setLocal(id: number): void { this.x.gs_set_local(this.h, id); }
   cmd(id: number, c: ArrayLike<number>): void { this.sim.io.set(c); this.x.gs_cmd(this.h, id); }

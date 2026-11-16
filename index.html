@@ -19,6 +19,8 @@
     <div id="hitmarker" hidden></div>
     <div id="scope" hidden></div>
     <div id="reticle" hidden></div>
+    <div id="markers"></div>
+    <div id="objective"></div>
     <div id="top-left"><div id="round"></div><div id="left"></div><div id="quest"></div></div>
     <div id="feed"></div>
     <div id="banner"></div>
@@ -79,6 +81,23 @@
         <label>Mode <select id="lobby-mode"></select></label>
         <label>Map <select id="lobby-map"></select></label>
       </div>
+      <p id="lobby-mode-desc" class="hint"></p>
+      <details id="lobby-rules">
+        <summary>Match settings <span id="rules-summary" class="hint"></span></summary>
+        <div class="rules-grid">
+          <label data-show="pvp">Time limit <select id="rule-time"></select></label>
+          <label data-show="score">Score limit <select id="rule-score"></select></label>
+          <label data-show="pvp">Respawn delay <select id="rule-respawn"></select></label>
+          <label>Health <select id="rule-health"></select></label>
+          <label data-show="survival">Starting round <select id="rule-round"></select></label>
+          <label data-show="survival">Starting points <select id="rule-points"></select></label>
+          <label class="check" data-show="teams"><input type="checkbox" id="rule-ff"> Friendly fire</label>
+          <label class="check" data-show="pvp"><input type="checkbox" id="rule-hs"> Headshots only</label>
+          <label class="check" data-show="abilities"><input type="checkbox" id="rule-abilities"> Abilities</label>
+          <label class="check" data-show="streaks"><input type="checkbox" id="rule-streaks"> Streaks</label>
+        </div>
+        <p id="rules-note" class="hint"></p>
+      </details>
       <p id="lobby-status" class="hint"></p>
       <div class="row">
         <button id="btn-start" class="primary">Start match</button>

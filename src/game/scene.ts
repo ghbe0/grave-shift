@@ -6,6 +6,7 @@ import { loadModel, type Model } from '../gfx/loader';
 import { compose, invert, lookAt, mat4, mul, ortho, perspective, transformPoint } from '../gfx/mat';
 import { cubeMesh, cylinderMesh, FLAG_NOSHADOW, FLAG_VIEWMODEL, INSTANCE_FLOATS, LIGHT_FLOATS, MAT, MAX_LIGHTS, sphereMesh, type Draw, type Frame, type Renderer } from '../gfx/renderer';
 import { CAMOS, FATIGUES, VESTS, type Look } from './look';
+import { MODES, TEAM_COLORS } from './rules';
 import type { Session, View } from './session';
 
 type RGB = [number, number, number];
@@ -289,6 +290,16 @@ export class Scene {
       this.flashes.push({ pos: at.slice(), t: life, life, color: [1, 0.8, 0.45], radius: 0, size: 0.05, glow: 6, vel: [rnd(9), 3 + Math.random() * 7, rnd(9)] });
     }
   }
+  /** Where a world point was on screen last frame (0..1 across and down), or null behind the camera. */
+  project(p: ArrayLike<number>): [number, number] | null {
+    const m = this.prevViewProj;
+    const w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
+    if (w <= 0.05) return null;
+    const x = (m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12]) / w;
+    const y = (m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13]) / w;
+    return [x * 0.5 + 0.5, 0.5 - y * 0.5];
+  }
+
   private tracerColor(weapon: number): RGB {
     const slug = this.sim.catalog.weapons[weapon]?.slug;
     return slug === 'arc' ? [0.3, 0.8, 1] : slug === 'stormlance' ? [0.7, 0.4, 1] : slug === 'verdict' ? [1, 0.5, 0.1] : [1, 0.85, 0.55];
@@ -380,7 +391,9 @@ export class Scene {
   private survivor(out: Batch, glow: Batch, groups: Map<string, { mesh: number; shadow: boolean; batch: Batch }>, p: { id: number; x: number; y: number; z: number; yaw: number; rec: Float32Array }, t: number): void {
     const { P } = this.sim.L;
     const look = this.lookOf(p.id);
-    const team: RGB = look.vest ? VESTS[look.vest - 1].rgb : PLAYER_COLORS[p.id % PLAYER_COLORS.length];
+    // In team modes the vest always shows the side, so friend and foe are easy to tell apart.
+    const side = MODES[this.session.start.mode]?.teams ? TEAM_COLORS[p.rec[P.team]] : undefined;
+    const team: RGB = side ?? (look.vest ? VESTS[look.vest - 1].rgb : PLAYER_COLORS[p.id % PLAYER_COLORS.length]);
     const fatigues: RGB = FATIGUES[look.fatigues]?.rgb ?? FATIGUES[0].rgb;
     const life = p.rec[P.life];
     const pitch = p.rec[P['ctl.pitch']];
@@ -580,6 +593,29 @@ export class Scene {
         glows.box(x + back[0] * 0.3, y + back[1] * 0.3, z + back[2] * 0.3, 0.09, 0.09, 0.09, [1, 0.6, 0.2], -1, 12, FLAG_NOSHADOW, t * 40, t * 30);
         lights.push({ pos: [x + back[0] * 0.4, y + back[1] * 0.4, z + back[2] * 0.4], radius: 7, color: [1, 0.55, 0.2], intensity: 12 });
         if (puff) this.flashes.push({ pos: [x + back[0] * 0.45, y + back[1] * 0.45, z + back[2] * 0.45], t: 0.6, life: 0.6, color: [0.16, 0.16, 0.17], radius: 0, size: 0.2 });
+      } else if (kind >= 40 && kind <= 45) {
+        // Capture zone (40-42) or the hill (45): a glowing ring on the ground in the holder's
+        // colour, filling with the capturing team's colour as progress builds.
+        const q = Math.floor(e[E.a] / 4), owner = Math.floor(q / 2) - 1, contested = q % 2 === 1, prog = e[E.a] - q * 4 - 1;
+        const hill = kind === 45, r = hill ? 4.5 : 3.5, segs = hill ? 28 : 22;
+        const neutral: RGB = [0.85, 0.85, 0.85];
+        const held: RGB = owner >= 0 ? TEAM_COLORS[owner] : neutral;
+        const filling: RGB = prog < 0 ? TEAM_COLORS[0] : TEAM_COLORS[1];
+        const filled = Math.round(Math.abs(prog) * segs);
+        const flash = contested && Math.sin(t * 10) > 0 ? 0.35 : 1;
+        for (let k = 0; k < segs; k++) {
+          const a = (k / segs) * Math.PI * 2;
+          const c = hill ? held : k < filled && owner < 0 ? filling : held;
+          glows.box(x + Math.cos(a) * r, 0.05, z + Math.sin(a) * r, 0.5, 0.06, 0.16, c, -1, 2.2 * flash, FLAG_NOSHADOW, -a);
+        }
+        glows.box(x, 3, z, 0.08, 6, 0.08, held, -1, 1.2 * flash, FLAG_NOSHADOW); // beacon
+        lights.push({ pos: [x, 1.2, z], radius: r * 1.8, color: held, intensity: 3 });
+      } else if (kind === 50 || kind === 51) {
+        // A dropped tag, in the colour of the fallen player's team.
+        const c = TEAM_COLORS[kind - 50];
+        const blink = e[E.a] < 5 && Math.sin(t * 12) > 0 ? 0.3 : 1;
+        glows.box(x, y + Math.sin(t * 3 + x) * 0.08, z, 0.18, 0.26, 0.04, c, -1, 3 * blink, FLAG_NOSHADOW, t * 2.5);
+        lights.push({ pos: [x, y, z], radius: 3, color: c, intensity: 2 * blink });
       } else if (kind === 30) {
         glows.box(x, 0.05, z, 1.2, 0.05, 1.2, [1, 0.2, 0.1], -1, 3 + Math.sin(t * 20) * 2, FLAG_NOSHADOW, t * 3);
       }

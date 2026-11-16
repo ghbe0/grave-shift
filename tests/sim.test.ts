@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { Btn, CMD_LEN, decodeSnap, Sim } from '../src/core/sim';
+import { defaultRules, MODES, rulesToFloats } from '../src/game/rules';
 
 let sim: Sim;
 beforeAll(async () => { sim = await Sim.load(readFileSync('src/core/sim.wasm')); });
@@ -71,5 +72,35 @@ describe('wasm core', () => {
     const replayed = client.playerState(5).slice(pos, pos + 3);
     for (let i = 0; i < 3; i++) expect(replayed[i]).toBeCloseTo(predicted[i], 4);
     host.free(); client.free();
+  });
+});
+
+describe('modes and match rules', () => {
+  it('the menus and the core agree on every mode\'s defaults', () => {
+    for (const m of MODES) expect(rulesToFloats(defaultRules(m.id))).toEqual(sim.defaultRules(m.id));
+    expect(sim.catalog.ladder.length).toBe(20);
+    expect(sim.catalog.ladder.at(-1)).toBe(0);
+    expect(new Set(sim.catalog.ladder).size).toBe(20);
+  });
+  it('rules set from the lobby reach the simulation', () => {
+    const { H, P } = sim.L;
+    const g = sim.newGame(1, 2, 3, true);
+    g.setRules(rulesToFloats({ ...defaultRules(2), scoreLimit: 50, health: 2 }));
+    g.addPlayer(0, 0, sim.defaultLoadout());
+    g.addPlayer(1, 1, sim.defaultLoadout());
+    const snap = decodeSnap(sim.L, g.snapshot())!;
+    expect(snap.hdr[H.score_limit]).toBe(50);
+    expect(snap.players.map(p => p[P.team])).toEqual([0, 1]);
+    expect(snap.players[0][P.max_health]).toBe(200);
+    expect([snap.hdr[H.score_a], snap.hdr[H.score_b]]).toEqual([0, 0]);
+    g.free();
+  });
+  it('domination puts three zones on the map', () => {
+    const { E } = sim.L;
+    const g = sim.newGame(0, 3, 1, true);
+    g.addPlayer(0, -1, sim.defaultLoadout());
+    const snap = decodeSnap(sim.L, g.snapshot())!;
+    expect(snap.ents.map(e => e[E.kind]).sort()).toEqual([40, 41, 42]);
+    g.free();
   });
 });

@@ -7,6 +7,7 @@ use crate::controller::*;
 use crate::loadout::*;
 use crate::maps::*;
 use crate::math::*;
+use crate::modes::*;
 use crate::state;
 use crate::util::{Field, Rd, Rng};
 use std::collections::VecDeque;
@@ -48,7 +49,9 @@ pub const EV_SPAWN: u32 = 21;
 pub const EV_ZATTACK: u32 = 22;
 pub const EV_STREAK: u32 = 23;
 pub const EV_TONIC: u32 = 24;
-pub const EVENT_NAMES: &str = "shot:1,hit:2,zdeath:3,pdown:4,pdeath:5,round:6,buy:7,powerup:8,explode:9,quest:10,msg:11,local:12,crate:13,ability:14,revive:15,gameover:16,door:17,power:18,barr:19,melee:20,spawn:21,zattack:22,streak:23,tonic:24,";
+/// Objective news: zone captured or lost, hill moved, tag confirmed or denied, ladder rung (see OB_*).
+pub const EV_OBJ: u32 = 25;
+pub const EVENT_NAMES: &str = "shot:1,hit:2,zdeath:3,pdown:4,pdeath:5,round:6,buy:7,powerup:8,explode:9,quest:10,msg:11,local:12,crate:13,ability:14,revive:15,gameover:16,door:17,power:18,barr:19,melee:20,spawn:21,zattack:22,streak:23,tonic:24,obj:25,";
 
 // EV_LOCAL kinds
 pub const LO_FIRE: f32 = 1.0;
@@ -134,6 +137,10 @@ state! {
         pub prompt_kind: u8,
         pub prompt_id: i32,
         pub prompt_cost: i32,
+        /// Weapon ladder rung.
+        pub stage: i32,
+        /// Objective work: zones taken, seconds on the hill, tags collected.
+        pub objs: i32,
     }
 }
 
@@ -161,6 +168,11 @@ state! {
         pub q1_step: i32,
         pub q1_prog: f32,
         pub score_limit: u32,
+        /// Team scores (team modes).
+        pub score_a: i32,
+        pub score_b: i32,
+        /// Seconds until the hill moves.
+        pub obj_t: f32,
         pub n_players: u32,
         pub n_zombies: u32,
         pub n_ents: u32,
@@ -275,6 +287,8 @@ pub struct Game {
     pub hist: VecDeque<Hist>,
     pub ents: Vec<Ent>,
     pub sv: Sv,
+    pub rules: Rules,
+    pub obj: Obj,
 }
 
 const REWIND_MAX: f32 = 0.4;
@@ -337,7 +351,7 @@ impl Game {
             time: 0.0,
             phase: PH_WARMUP,
             timer: if mode == MODE_SURVIVAL { 6.0 } else { 5.0 },
-            score_limit: 25,
+            score_limit: Rules::defaults(mode).score_limit,
             local: -1,
             map: build(map),
             slots: vec![],
@@ -346,13 +360,16 @@ impl Game {
             hist: VecDeque::new(),
             ents: vec![],
             sv: Sv::default(),
+            rules: Rules::defaults(mode),
+            obj: Obj::default(),
         };
         g.sv.crate_at = g.map.inter.iter().position(|i| i.kind == I_CRATE).unwrap_or(usize::MAX);
         g.sv.crate_owner = -1;
         g.sv.crate_weapon = -1;
-        if mode == MODE_SKIRMISH {
+        if mode != MODE_SURVIVAL {
             g.set_doors(u32::MAX);
             g.sv.power = true;
+            g.setup_mode();
         }
         g
     }
@@ -385,14 +402,15 @@ impl Game {
         if self.idx(id).is_some() {
             return;
         }
+        let team = self.pick_team(team);
         let p = Player { id, team, tonic: -1, prompt_id: -1, ability: -1, life: DEAD, ..Default::default() };
         self.slots.push(Slot { p, loadout: sanitize(&loadout), bank: 0.2, mod_cd: 0.0, tonic_buys: 0, rebuilt: 0 });
         let i = self.slots.len() - 1;
         if self.mode == MODE_SURVIVAL {
-            self.slots[i].p.points = 500;
+            self.slots[i].p.points = self.rules.start_points;
         }
         // Late joiners in survival wait for the next round.
-        if self.mode == MODE_SKIRMISH || self.phase == PH_WARMUP || self.sv.round == 0 {
+        if self.pvp() || self.phase == PH_WARMUP || self.sv.round == 0 {
             self.spawn(i);
         }
     }
@@ -401,24 +419,13 @@ impl Game {
     }
 
     pub fn spawn(&mut self, i: usize) {
-        let spawns = &self.map.spawns;
-        let pos = if self.mode == MODE_SKIRMISH {
-            // Farthest spawn from every living enemy.
-            let me = self.slots[i].p.id;
-            let enemies: Vec<V3> = self.slots.iter().filter(|s| s.p.id != me && s.p.life == ALIVE).map(|s| s.p.ctl.pos).collect();
-            let far = |s: &V3| enemies.iter().map(|e| e.dist(*s)).fold(f32::MAX, f32::min);
-            let mut best = spawns[self.rng.range(spawns.len())];
-            if !enemies.is_empty() {
-                for s in spawns {
-                    if far(s) > far(&best) {
-                        best = *s;
-                    }
-                }
-            }
-            best
+        let pos = if self.pvp() {
+            self.pvp_spawn_point(i)
         } else {
+            let spawns = &self.map.spawns;
             spawns[self.slots[i].p.id.max(0) as usize % spawns.len()]
         };
+        let (health, abilities) = (100.0 * self.rules.health, self.abilities_on());
         let center = v3(self.map.size.0 * 0.5, 0.0, self.map.size.1 * 0.5);
         let yaw = (-(center.x - pos.x)).atan2(-(center.z - pos.z));
         let mode = self.mode;
@@ -427,8 +434,8 @@ impl Game {
         let p = &mut s.p;
         p.ctl = Ctl::spawn(pos, yaw);
         p.life = ALIVE;
-        p.max_health = 100.0;
-        p.health = 100.0;
+        p.max_health = health;
+        p.health = health;
         p.invuln_t = 2.0;
         p.down_t = 0.0;
         p.revive_t = 0.0;
@@ -436,9 +443,12 @@ impl Game {
         p.active_t = 0.0;
         p.streak_score = 0.0;
         p.streak_ready = 0;
-        p.ability = l[L_ABILITY];
+        p.ability = if abilities { l[L_ABILITY] } else { -1 };
         p.arms = Arms::default();
-        if mode == MODE_SKIRMISH {
+        if mode == MODE_LADDER {
+            p.kit_perks = perk_mask(&l);
+            p.arms.guns = [Gun::new(LADDER[(p.stage.max(0) as usize).min(LADDER.len() - 1)], 0), Gun::NONE, Gun::NONE];
+        } else if mode != MODE_SURVIVAL {
             p.kit_perks = perk_mask(&l);
             p.arms.guns = [Gun::new(l[L_PRIMARY], att_mask(&l[L_PATT..L_PATT + 3])), Gun::new(l[L_SECONDARY], att_mask(&l[L_SATT..L_SATT + 2])), Gun::NONE];
             if p.arms.guns[0].id < 0 {
@@ -640,11 +650,11 @@ impl Game {
             .filter(|z| z.state != Z_DEAD && z.state != Z_TURNED)
             .map(|z| (z.id, frame.and_then(|f| f.z.iter().find(|h| h.0 == z.id)).map_or(z.pos, |h| h.1)))
             .collect();
-        let ppos: Vec<(usize, V3, f32)> = if self.mode == MODE_SKIRMISH {
+        let ppos: Vec<(usize, V3, f32)> = if self.pvp() {
             self.slots
                 .iter()
                 .enumerate()
-                .filter(|(j, o)| *j != i && o.p.life == ALIVE)
+                .filter(|(j, o)| self.hostile(i, *j) && o.p.life == ALIVE)
                 .map(|(j, o)| {
                     let h = frame.and_then(|f| f.p.iter().find(|h| h.0 == o.p.id));
                     (j, h.map_or(o.p.ctl.pos, |h| h.1), h.map_or(o.p.ctl.height(), |h| h.2))
@@ -719,10 +729,12 @@ impl Game {
                     }
                     Target::Player(j) => {
                         hit_kind = 2.0;
-                        let killed = self.damage_player(j, dmg, i as i32, gun.id, false, origin);
+                        // Headshots only: body hits still show, but do no damage.
+                        let dmg = if self.rules.headshots_only && !head { 0.0 } else { dmg };
+                        let killed = dmg > 0.0 && self.damage_player(j, dmg, i as i32, gun.id, false, origin);
                         self.ev(EV_HIT, &[p.id as f32, 1.0, head as u32 as f32, killed as u32 as f32, at.x, at.y, at.z]);
                         if s.flags & WF_CHAIN != 0 {
-                            let near: Vec<usize> = (0..self.slots.len()).filter(|k| *k != j && *k != i && self.slots[*k].p.life == ALIVE && self.slots[*k].p.ctl.pos.dist(at) < 4.5).collect();
+                            let near: Vec<usize> = (0..self.slots.len()).filter(|k| *k != j && self.hostile(i, *k) && self.slots[*k].p.life == ALIVE && self.slots[*k].p.ctl.pos.dist(at) < 4.5).collect();
                             for k in near {
                                 self.damage_player(k, dmg * 0.5, i as i32, gun.id, false, at);
                             }
@@ -750,8 +762,8 @@ impl Game {
             let dmg = 150.0 + if self.sv.round < 12 { 0.0 } else { 100.0 };
             self.award(i, 10);
             self.damage_zombie(z.0, dmg, i as i32, false, true, z.1 + v3(0.0, 1.2, 0.0));
-        } else if self.mode == MODE_SKIRMISH {
-            if let Some(j) = (0..self.slots.len()).find(|j| *j != i && self.slots[*j].p.life == ALIVE && reach(self.slots[*j].p.ctl.pos, HEIGHT)) {
+        } else if self.pvp() {
+            if let Some(j) = (0..self.slots.len()).find(|j| self.hostile(i, *j) && self.slots[*j].p.life == ALIVE && reach(self.slots[*j].p.ctl.pos, HEIGHT)) {
                 self.damage_player(j, 100.0, i as i32, -1, false, origin);
             }
         }
@@ -761,8 +773,8 @@ impl Game {
         let s = &self.slots[i];
         let p = s.p;
         let kind = if lethal {
-            if self.mode == MODE_SKIRMISH && s.loadout[L_LETHAL] == 1 { E_IMPACT } else { E_FRAG }
-        } else if self.mode == MODE_SKIRMISH && s.loadout[L_TACTICAL] == 1 {
+            if self.mode != MODE_SURVIVAL && s.loadout[L_LETHAL] == 1 { E_IMPACT } else { E_FRAG }
+        } else if self.mode != MODE_SURVIVAL && s.loadout[L_TACTICAL] == 1 {
             // Stim: no projectile.
             self.slots[i].p.health = p.max_health;
             return;
@@ -821,13 +833,13 @@ impl Game {
             return false;
         }
         let vid = p.id as f32;
-        if mode == MODE_SKIRMISH {
+        if mode != MODE_SURVIVAL {
             p.life = DEAD;
-            p.respawn_t = 3.0;
+            p.respawn_t = self.rules.respawn;
             p.deaths += 1;
             p.health = 0.0;
             self.ev(EV_PDEATH, &[vid, if by >= 0 { self.slots[by as usize].p.id as f32 } else { -1.0 }, weapon as f32]);
-            if by >= 0 && by as usize != j {
+            if by >= 0 && (by as usize) < self.slots.len() && self.enemies(by as usize, j) {
                 let k = by as usize;
                 self.slots[k].p.kills += 1;
                 self.award(k, 100);
@@ -835,6 +847,7 @@ impl Game {
                     self.resupply(k, 0.34);
                 }
             }
+            self.on_pvp_death(j, by, weapon);
             return true;
         }
         if Self::has_tonic(p, T_LAUGH) {
@@ -854,7 +867,7 @@ impl Game {
         p.deaths += 1;
         p.self_revive = if solo && p.perks & SP_SECOND != 0 { 1.0 } else { 0.0 };
         p.perks = 0;
-        p.max_health = 100.0;
+        p.max_health = 100.0 * self.rules.health;
         p.active_t = 0.0;
         if p.arms.guns[2].id >= 0 {
             p.arms.guns[2] = Gun::NONE;
@@ -893,10 +906,12 @@ impl Game {
         for (id, d) in hit {
             self.damage_zombie(id, zdmg * (1.0 - 0.6 * d / r), oi, false, false, pos);
         }
-        if self.mode == MODE_SKIRMISH && pdmg > 0.0 {
+        if self.pvp() && pdmg > 0.0 && !self.rules.headshots_only {
             for j in 0..self.slots.len() {
                 let d = self.slots[j].p.ctl.pos.dist(pos);
-                if d < r {
+                // Your own blast always hurts you; others' only if they are hostile to you.
+                let hurts = oi < 0 || j as i32 == oi || self.hostile(oi as usize, j);
+                if d < r && hurts {
                     let own = if j as i32 == oi { 0.5 } else { 1.0 };
                     self.damage_player(j, pdmg * (1.0 - 0.7 * d / r) * own, oi, weapon, true, pos);
                 }
@@ -994,6 +1009,7 @@ impl Game {
             c.mode = MODE_NORMAL;
         }
         let mode = self.mode;
+        let (health_mult, streaks) = (self.rules.health, self.streaks_on());
         let s = &mut self.slots[i];
         s.bank = (s.bank + dt).min(0.5);
         s.mod_cd = (s.mod_cd - dt).max(0.0);
@@ -1005,7 +1021,7 @@ impl Game {
         if p.life != ALIVE {
             return;
         }
-        p.max_health = if p.perks & SP_IRONHIDE != 0 { 200.0 } else { 100.0 };
+        p.max_health = if p.perks & SP_IRONHIDE != 0 { 200.0 } else { 100.0 } * health_mult;
         p.regen_t += dt;
         let delay = if p.kit_perks & KP_HARDY != 0 { 2.5 } else { 4.0 };
         if p.regen_t > delay {
@@ -1031,7 +1047,7 @@ impl Game {
                 p.charge = (p.charge + dt / a.charge_time * rate).min(1.0);
             }
         }
-        if mode == MODE_SKIRMISH {
+        if streaks {
             for n in 0..3 {
                 let id = l[L_STREAK + n];
                 let got = 1 << (8 + n);
@@ -1094,8 +1110,9 @@ impl Game {
                     for z in self.sv.zombies.iter().filter(|z| z.state != Z_DEAD && z.state != Z_TURNED) {
                         touch(z.pos + v3(0.0, Z_BODY * 0.55, 0.0), Z_RADIUS + 0.3);
                     }
-                    if self.mode == MODE_SKIRMISH {
-                        for o in self.slots.iter().filter(|o| o.p.id != e.owner && o.p.life == ALIVE) {
+                    if self.pvp() {
+                        let shooter = self.idx(e.owner);
+                        for (_, o) in self.slots.iter().enumerate().filter(|(j, o)| o.p.life == ALIVE && shooter.map_or(true, |k| self.hostile(k, *j))) {
                             touch(o.p.ctl.pos + v3(0.0, o.p.ctl.height() * 0.5, 0.0), RADIUS + 0.3);
                         }
                     }
@@ -1143,9 +1160,11 @@ impl Game {
                         for z in self.sv.zombies.iter_mut().filter(|z| z.pos.dist(e.pos) < 6.0) {
                             z.slow_t = 5.0;
                         }
-                        if self.mode == MODE_SKIRMISH {
-                            for s in self.slots.iter_mut().filter(|s| s.p.id != e.owner && s.p.ctl.pos.dist(e.pos) < 6.0) {
-                                s.p.slow_t = 4.0;
+                        if self.pvp() {
+                            let thrower = self.idx(e.owner);
+                            let hit: Vec<usize> = (0..self.slots.len()).filter(|j| thrower.map_or(true, |k| self.hostile(k, *j)) && self.slots[*j].p.ctl.pos.dist(e.pos) < 6.0).collect();
+                            for j in hit {
+                                self.slots[j].p.slow_t = 4.0;
                             }
                         }
                     }
@@ -1169,12 +1188,15 @@ impl Game {
                 self.timer -= dt;
                 if self.timer <= 0.0 {
                     self.phase = PH_ACTIVE;
-                    self.timer = 480.0;
+                    // No time limit: the clock reads -1 and never runs out.
+                    self.timer = if self.rules.time_limit > 0.0 { self.rules.time_limit } else { -1.0 };
                     self.ev(EV_ROUND, &[1.0, 0.0]);
                 }
             }
             PH_ACTIVE => {
-                self.timer -= dt;
+                if self.rules.time_limit > 0.0 {
+                    self.timer -= dt;
+                }
                 for i in 0..self.slots.len() {
                     let p = &mut self.slots[i].p;
                     if p.life == DEAD {
@@ -1184,12 +1206,10 @@ impl Game {
                         }
                     }
                 }
-                let top = self.slots.iter().max_by_key(|s| s.p.kills).map(|s| (s.p.id, s.p.kills));
-                if let Some((id, kills)) = top {
-                    if kills as u32 >= self.score_limit || self.timer <= 0.0 {
-                        self.phase = PH_OVER;
-                        self.ev(EV_GAMEOVER, &[id as f32, kills as f32]);
-                    }
+                self.mode_step(dt);
+                if let Some((id, score, team, draw)) = self.pvp_result() {
+                    self.phase = PH_OVER;
+                    self.ev(EV_GAMEOVER, &[id, score, team, draw as u32 as f32]);
                 }
             }
             _ => {}
@@ -1225,6 +1245,9 @@ impl Game {
             q1_step: q(1).0,
             q1_prog: q(1).1,
             score_limit: self.score_limit,
+            score_a: self.obj.score[0],
+            score_b: self.obj.score[1],
+            obj_t: self.obj.hill_t,
             n_players: self.slots.len() as u32,
             n_zombies: self.sv.zombies.len() as u32,
             n_ents: self.ents.len() as u32,
@@ -1242,7 +1265,12 @@ impl Game {
             ZRec { id: z.id, pos: z.pos, yaw: z.yaw, state: z.state, hp: (z.hp / z.max_hp).clamp(0.0, 1.0), kind: z.kind }.put(o);
         }
         for e in &self.ents {
-            ERec { kind: e.kind, pos: e.pos, a: if e.kind == E_ROCKET { pack_dir(e.vel) } else { e.t } }.put(o);
+            let a = match e.kind {
+                E_ROCKET => pack_dir(e.vel),
+                k if (E_ZONE..E_ZONE + 3).contains(&k) || k == E_HILL => pack_zone(e.owner, e.vel.x, e.vel.y > 0.5),
+                _ => e.t,
+            };
+            ERec { kind: e.kind, pos: e.pos, a }.put(o);
         }
         for b in &self.map.barrs {
             o.push(b.boards as f32);
@@ -1535,7 +1563,7 @@ mod tests {
     fn host_survives_garbage_from_guests() {
         let mut r = Rng::new(99);
         for map in 0..crate::maps::MAPS.len() {
-            for mode in [MODE_SURVIVAL, MODE_SKIRMISH] {
+            for mode in 0..MODE_COUNT {
                 let mut g = Game::new(map, mode, 7, true);
                 g.local = 0;
                 g.add_player(0, 0, default_loadout());

@@ -11,6 +11,7 @@ import { frameRateOptions, FrameLimiter, FrameMeter, isFpsLimit } from './engine
 import { streamMaterials, type MaterialStream } from './gfx/materials';
 import { createRenderer, TEXTURE_QUALITY, type Renderer, type TextureQuality } from './gfx/renderer';
 import { clientToken, GuestLobby, HostLobby, MODES, type KickReason, type LobbyState, type StartMsg } from './netcode/lobby';
+import { defaultRules, HEALTH_CHOICES, POINTS_CHOICES, RESPAWN_CHOICES, ROUND_CHOICES, rulesSummary, scoreChoices, TEAM_CSS, TEAM_NAMES, TIME_CHOICES, type Choice, type Rules } from './game/rules';
 import { codeFromUrl, normalizeCode, partyLink, setUrlCode } from './netcode/party';
 import { createTransport, NetError } from './netcode/transport';
 import { CAMOS, CARDS, cardHtml, COLORS, CROSSHAIRS, DEFAULT_LOOK, EMBLEMS, FATIGUES, HEADGEAR, loadLook, RETICLES, reticleSvg, saveLook, VESTS, type Look } from './game/look';
@@ -311,6 +312,27 @@ class App {
     this.sim.catalog.maps.forEach(m => map.add(new Option(m.name, String(m.id))));
     mode.onchange = () => this.host?.setMode(+mode.value);
     map.onchange = () => this.host?.setMap(+map.value);
+    // Match settings: only the host can change them; guests see them read-only.
+    const fill = (id: string, choices: Choice[]) => { const el = $<HTMLSelectElement>(id); el.replaceChildren(...choices.map(c => new Option(c[1], String(c[0])))); };
+    fill('rule-time', TIME_CHOICES);
+    fill('rule-respawn', RESPAWN_CHOICES);
+    fill('rule-health', HEALTH_CHOICES);
+    fill('rule-round', ROUND_CHOICES);
+    fill('rule-points', POINTS_CHOICES);
+    const rule = (id: string, key: keyof Rules) => {
+      const el = $<HTMLInputElement | HTMLSelectElement>(id);
+      el.onchange = () => this.host?.setRules({ [key]: el instanceof HTMLInputElement && el.type === 'checkbox' ? el.checked : +el.value });
+    };
+    rule('rule-time', 'timeLimit');
+    rule('rule-score', 'scoreLimit');
+    rule('rule-respawn', 'respawn');
+    rule('rule-health', 'health');
+    rule('rule-round', 'startRound');
+    rule('rule-points', 'startPoints');
+    rule('rule-ff', 'friendlyFire');
+    rule('rule-hs', 'headshotsOnly');
+    rule('rule-abilities', 'abilities');
+    rule('rule-streaks', 'streaks');
 
     const s = this.settings;
     const bind = (id: string, key: keyof Settings, apply: () => void) => {
@@ -387,7 +409,7 @@ class App {
   private startSolo(): void {
     const seed = (Math.random() * 2 ** 31) | 0;
     this.hud.setNames([{ id: 0, name: this.name() || 'You' }]);
-    this.begin({ t: 'start', map: 0, mode: 0, seed, players: [{ id: 0, team: 0, loadout: this.editor.loadout, look: this.look }] }, 0);
+    this.begin({ t: 'start', map: 0, mode: 0, seed, rules: defaultRules(0), players: [{ id: 0, team: 0, loadout: this.editor.loadout, look: this.look }] }, 0);
   }
 
   private async hostParty(): Promise<void> {
@@ -443,16 +465,57 @@ class App {
     $<HTMLSelectElement>('lobby-map').disabled = !isHost;
     $('btn-start').hidden = !isHost;
     $('btn-ready').hidden = isHost;
+    const info = MODES[st.mode];
+    $('lobby-mode-desc').textContent = info.desc;
+    this.renderRules(st.rules, st.mode, isHost);
+    const selfId = this.host ? 0 : this.guest?.selfId;
+    // In team modes players are listed by team; anyone can ask to switch sides, the host can move anyone.
+    const row = (p: LobbyState['players'][number]) => {
+      const team = info.teams && p.team >= 0 ? `<b class="team" style="--team:${TEAM_CSS[p.team]}">${TEAM_NAMES[p.team]}</b>` : '';
+      const move = info.teams && (isHost || p.id === selfId) ? `<button data-team="${p.id}">Switch team</button>` : '';
+      const admin = isHost && !p.host ? `<button data-kick="${p.id}">Kick</button><button data-ban="${p.id}">Ban</button>` : '';
+      return `<li>${team}${cardHtml(p.look, escapeHtml(p.name), true)}<span></span><em>${p.host ? 'host' : p.ready ? 'ready' : 'not ready'}</em>${move}${admin}</li>`;
+    };
+    const players = info.teams ? [...st.players].sort((a, b) => a.team - b.team) : st.players;
     const list = $('lobby-players');
-    list.innerHTML = st.players.map(p => `<li>${cardHtml(p.look, escapeHtml(p.name), true)}<span></span><em>${p.host ? 'host' : p.ready ? 'ready' : 'not ready'}</em>${isHost && !p.host ? `<button data-kick="${p.id}">Kick</button><button data-ban="${p.id}">Ban</button>` : ''}</li>`).join('');
+    list.innerHTML = players.map(row).join('');
     list.querySelectorAll<HTMLButtonElement>('[data-kick]').forEach(b => (b.onclick = () => this.host?.kick(+b.dataset.kick!)));
     list.querySelectorAll<HTMLButtonElement>('[data-ban]').forEach(b => (b.onclick = () => this.host?.ban(+b.dataset.ban!)));
+    list.querySelectorAll<HTMLButtonElement>('[data-team]').forEach(b => (b.onclick = () => {
+      const p = st.players.find(q => q.id === +b.dataset.team!);
+      if (!p) return;
+      if (this.host) this.host.setTeam(p.id, 1 - Math.max(0, p.team)); else this.guest?.setTeam(1 - Math.max(0, p.team));
+    }));
     const waiting = st.players.filter(p => !p.host && !p.ready).length;
-    $('lobby-status').textContent = `${st.players.length} / ${MODES[st.mode].max} players · ${MODES[st.mode].desc}${isHost && waiting ? ` · ${waiting} not ready` : ''}`;
+    const sides = info.teams ? ` · ${TEAM_NAMES[0]} ${st.players.filter(p => p.team === 0).length} v ${st.players.filter(p => p.team === 1).length} ${TEAM_NAMES[1]}` : '';
+    $('lobby-status').textContent = `${st.players.length} / ${info.max} players${sides}${isHost && waiting ? ` · ${waiting} not ready` : ''}`;
     if (!isHost) $('btn-ready').textContent = st.players.find(p => p.id === this.guest?.selfId)?.ready ? 'Not ready' : 'Ready';
     const mine = st.players.find(p => p.id === (this.host ? 0 : this.guest?.selfId));
     const lobbyName = $<HTMLInputElement>('lobby-name');
     if (mine && document.activeElement !== lobbyName) lobbyName.value = mine.name;
+  }
+
+  /** Match settings panel: the controls that apply to this mode, read-only for guests. */
+  private renderRules(r: Rules, mode: number, isHost: boolean): void {
+    const info = MODES[mode];
+    const show: Record<string, boolean> = {
+      pvp: mode !== 0, score: mode !== 0 && mode !== 6, survival: mode === 0, teams: info.teams,
+      abilities: mode !== 6, streaks: mode !== 0 && mode !== 6,
+    };
+    document.querySelectorAll<HTMLElement>('#lobby-rules [data-show]').forEach(el => (el.hidden = !show[el.dataset.show!]));
+    const score = $<HTMLSelectElement>('rule-score');
+    const choices = scoreChoices(mode);
+    if (score.options.length !== choices.length || [...score.options].some((o, i) => o.value !== String(choices[i][0]))) score.replaceChildren(...choices.map(c => new Option(c[1], String(c[0]))));
+    const set = (id: string, v: number | boolean) => {
+      const el = $<HTMLInputElement | HTMLSelectElement>(id);
+      if (el instanceof HTMLInputElement && el.type === 'checkbox') el.checked = v as boolean; else el.value = String(v);
+      el.disabled = !isHost;
+    };
+    set('rule-time', r.timeLimit); set('rule-score', r.scoreLimit); set('rule-respawn', r.respawn); set('rule-health', r.health);
+    set('rule-round', r.startRound); set('rule-points', r.startPoints);
+    set('rule-ff', r.friendlyFire); set('rule-hs', r.headshotsOnly); set('rule-abilities', r.abilities); set('rule-streaks', r.streaks);
+    $('rules-summary').textContent = rulesSummary(r, mode);
+    $('rules-note').textContent = isHost ? (mode === 6 ? 'The ladder has 20 weapons; streaks and abilities are off.' : '') : 'Only the host can change match settings.';
   }
 
   private startParty(): void {
@@ -614,7 +677,7 @@ class App {
     // The HUD is DOM text: refreshing it faster than 60 Hz costs time and shows nothing new.
     if (now - this.lastHud >= 16) {
       this.lastHud = now;
-      this.hud.update(s, this.input.scoreboard);
+      this.hud.update(s, this.input.scoreboard, p => this.scene?.project(p) ?? null);
       if (this.settings.showFps) $('fps').textContent = `${Math.round(this.meter.fps)} fps · ${this.meter.frameMs.toFixed(1)} ms${this.meter.displayHz ? ` · ${this.meter.displayHz} Hz display` : ''}`;
     }
   }
