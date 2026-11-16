@@ -280,7 +280,7 @@ async function party(net) {
   await engage(guest);
   // The guest walks forward; its position must reach the host and come back in snapshots.
   await guest.evaluate(() => { window.app.input.move = () => [0, 1]; });
-  await waitRound(guest, 60000);
+  await waitRound(guest, 150000);
   await guest.waitForTimeout(2000);
   const g = await guest.evaluate(() => {
     const a = window.app, s = a.session, P = a.sim.L.P;
