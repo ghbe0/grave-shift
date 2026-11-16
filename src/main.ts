@@ -575,7 +575,7 @@ class App {
     for (const p of start.players) this.looks.set(p.id, p.look);
     this.looks.set(selfId, this.look);
     // Phones draw about half the grass and ivy; the ?low test switch draws a fifth.
-    this.scene = new Scene(this.renderer, this.sim, session, id => this.lookOf(id), params.has('low') ? 0.2 : document.body.classList.contains('touch') ? 0.5 : 1);
+    this.scene = new Scene(this.renderer, this.sim, session, id => this.lookOf(id), params.has('low') ? 0.1 : document.body.classList.contains('touch') ? 0.5 : 1);
     session.onEvent = e => {
       if (!this.scene || !this.session) return;
       this.scene.handleEvent(e, this.session.view(this.settings.fov));

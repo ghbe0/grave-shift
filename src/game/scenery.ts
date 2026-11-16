@@ -47,8 +47,12 @@ export class Scenery {
     };
     this.rnd = rng(9001 + site.seed * 131);
     this.props();
-    this.walls();
-    this.ground();
+    // Below a quarter detail (the ?low test switch on software renderers) only the props that
+    // have collision are drawn.
+    if (site.detail >= 0.25) {
+      this.walls();
+      this.ground();
+    }
   }
 
   /** Draw calls for the static scenery, appended to the frame's instance buffer by `add`. */
@@ -112,7 +116,7 @@ export class Scenery {
     this.leafBall(top[0], top[1] + 0.9, top[2], this.range(1.1, 1.45), tint, 0.9);
     this.leafBall(top[0] + this.range(-0.5, 0.5), top[1] + 1.7, top[2] + this.range(-0.5, 0.5), this.range(0.75, 1.0), tint, 0.9);
     // Smaller sprays around the edge break up the outline.
-    for (let k = 0; k < 7; k++) {
+    for (let k = 0; k < Math.round(7 * Math.min(1, this.site.detail * 2)); k++) {
       const a = this.range(0, 6.28), d = this.range(1.3, 2.3);
       this.leafBall(top[0] + Math.cos(a) * d, top[1] + this.range(0.2, 1.9), top[2] + Math.sin(a) * d, this.range(0.4, 0.65), tint, 0.8);
     }
