@@ -19,7 +19,7 @@ struct Globals {
   sunColor: vec4f, // rgb, intensity
   sky: vec4f,      // rgb horizon colour, fog density
   params: vec4f,   // light count, time, shadow texel size, viewmodel depth split
-  tiles: array<vec4f, 3>, // metres per repeat for each material layer
+  tiles: array<vec4f, 5>, // metres per repeat for each material layer
   lights: array<Light, 16>,
 }
 @group(0) @binding(0) var<uniform> G: Globals;
@@ -129,7 +129,7 @@ fn sunShadow(world: vec3f, n: vec3f) -> f32 {
 }
 
 fn tileOf(layer: i32) -> f32 {
-  let i = clamp(layer, 0, 11);
+  let i = clamp(layer, 0, 19);
   return G.tiles[i / 4][i % 4];
 }
 

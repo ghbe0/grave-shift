@@ -1,11 +1,10 @@
 // In-match HUD drawn with DOM elements over the canvas.
 import type { Sim, Snap } from '../core/sim';
-import { PLAYER_COLORS } from '../game/scene';
+import { cardHtml, COLORS, DEFAULT_LOOK, reticleSvg, type Look } from '../game/look';
 import type { Session } from '../game/session';
 
 const $ = (id: string) => document.getElementById(id)!;
 const INTERACT = ['', 'door', 'wallbuy', 'perk', 'crate', 'bench', 'tonic', 'power', 'workbench', 'part', 'console', 'barricade', 'revive'];
-const css = (c: number[]) => `rgb(${c.map(v => Math.round(v * 255)).join(',')})`;
 
 export class Hud {
   private feed: { text: string; until: number }[] = [];
@@ -13,8 +12,20 @@ export class Hud {
   private hitUntil = 0;
   private hitKill = false;
   private names = new Map<number, string>();
+  private reticleHtml = '';
+  /** Each player's customization, for calling cards on the scoreboard. */
+  lookOf: (id: number) => Look = () => DEFAULT_LOOK;
 
   constructor(private sim: Sim) {}
+
+  /** Crosshair style and colour, and the sight reticle shown while aiming. */
+  applyLook(look: Look): void {
+    const ch = $('crosshair');
+    ch.dataset.style = String(look.crosshair);
+    ch.style.setProperty('--ch', COLORS[look.crosshairColor]?.css ?? '#fff');
+    this.reticleHtml = reticleSvg(look.reticle, COLORS[look.reticleColor]?.css ?? '#ff3b30');
+    setHtml('reticle', this.reticleHtml);
+  }
 
   setNames(players: { id: number; name: string }[]): void { for (const p of players) this.names.set(p.id, p.name); }
   private name(id: number): string { return this.names.get(id) ?? `Player ${id + 1}`; }
@@ -144,8 +155,14 @@ export class Hud {
     const gap = 6 + speed * 1.2 + (p[P['ctl.grounded']] ? 0 : 8);
     const ch = $('crosshair');
     ch.style.setProperty('--gap', `${gap}px`);
-    ch.style.opacity = `${life === 0 ? 1 - p[P['arms.ads']] * (w && w.zoom > 2 ? 0 : 0.9) : 0}`;
-    $('scope').hidden = !(w && w.zoom > 2 && p[P['arms.ads']] > 0.9);
+    // Aiming swaps the crosshair for the sight's reticle (scoped rifles use the scope overlay).
+    const ads = p[P['arms.ads']];
+    const scoped = !!w && w.zoom > 2;
+    ch.style.opacity = `${life === 0 ? (scoped ? 1 - ads : Math.max(0, 1 - ads * 1.6)) : 0}`;
+    $('scope').hidden = !(scoped && ads > 0.9);
+    const ret = $('reticle');
+    ret.hidden = !(life === 0 && w && !scoped && ads > 0.55);
+    if (!ret.hidden) ret.style.opacity = `${Math.min(1, (ads - 0.55) / 0.35)}`;
     const hm = $('hitmarker');
     hm.hidden = now > this.hitUntil;
     hm.classList.toggle('kill', this.hitKill);
@@ -157,7 +174,7 @@ export class Hud {
     $('scoreboard').hidden = !scoreboard && hdr[H.phase] !== 3;
     if (!$('scoreboard').hidden) {
       const rows = [...snap.players].sort((a, b) => (survival ? b[P.score] - a[P.score] : b[P.kills] - a[P.kills])).map(r =>
-        `<tr class="${r[P.id] === s.selfId ? 'me' : ''}"><td><i style="background:${css(PLAYER_COLORS[r[P.id] % PLAYER_COLORS.length])}"></i>${escapeHtml(this.name(r[P.id]))}</td><td>${survival ? r[P.points] : r[P.score]}</td><td>${r[P.kills]}</td><td>${survival ? r[P.headshots] : r[P.deaths]}</td><td>${survival ? r[P.deaths] : ''}</td></tr>`);
+        `<tr class="${r[P.id] === s.selfId ? 'me' : ''}"><td>${cardHtml(this.lookOf(r[P.id]), escapeHtml(this.name(r[P.id])), true)}</td><td>${survival ? r[P.points] : r[P.score]}</td><td>${r[P.kills]}</td><td>${survival ? r[P.headshots] : r[P.deaths]}</td><td>${survival ? r[P.deaths] : ''}</td></tr>`);
       setHtml('scoreboard', `<table><tr><th>${cat.maps[s.start.map].name}</th><th>${survival ? 'Points' : 'Score'}</th><th>Kills</th><th>${survival ? 'Headshots' : 'Deaths'}</th><th>${survival ? 'Downs' : ''}</th></tr>${rows.join('')}</table>`);
     }
 

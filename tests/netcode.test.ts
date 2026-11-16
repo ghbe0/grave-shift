@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { decodeSnap, type Layout } from '../src/core/sim';
 import { lerpAngle, SnapshotBuffer } from '../src/netcode/interp';
+import { DEFAULT_LOOK } from '../src/game/look';
 import { GuestLobby, HostLobby } from '../src/netcode/lobby';
 import { codeFromUrl, generateCode, normalizeCode, partyLink } from '../src/netcode/party';
 import { LocalTransport } from '../src/netcode/transport';
@@ -129,14 +130,14 @@ describe('hostile peers', () => {
         link.sendCtl({
           t: 'welcome',
           id: 4,
-          lobby: { code: '<b>x</b>', players: [{ id: '1" onclick="x', name: '<img src=x onerror=alert(1)>', host: 'yes', ready: 1 }], map: 1e9, mode: -5, inMatch: 'true' },
+          lobby: { code: '<b>x</b>', players: [{ id: '1" onclick="x', name: '<img src=x onerror=alert(1)>', host: 'yes', ready: 1, look: { camo: 99, vest: -1, card: '<x>', emblem: 2 } }], map: 1e9, mode: -5, inMatch: 'true' },
         });
         sendStart = m => link.sendCtl(m);
       };
     };
     const guest = await GuestLobby.join(t, code, 'Ann', 'tok', loadout);
     expect(guest.selfId).toBe(4);
-    expect(guest.state).toEqual({ code: 'BXB', players: [{ id: 0, name: 'img srcx onerror', host: false, ready: false }], map: 0, mode: 0, inMatch: false });
+    expect(guest.state).toEqual({ code: 'BXB', players: [{ id: 0, name: 'img srcx onerror', host: false, ready: false, look: { ...DEFAULT_LOOK, emblem: 2 } }], map: 0, mode: 0, inMatch: false });
     let started: unknown;
     guest.onStart = m => (started = m);
     sendStart({ t: 'start', map: 'x', mode: 99, seed: NaN, players: [{ id: -1, team: 'a', loadout: ['x', 1e9, 3] }, ...Array(50).fill({})] });
@@ -144,7 +145,7 @@ describe('hostile peers', () => {
     expect(started).toMatchObject({ t: 'start', map: 0, mode: 0, seed: 1 });
     const s = started as { players: { id: number; team: number; loadout: number[] }[] };
     expect(s.players.length).toBe(16);
-    expect(s.players[0]).toEqual({ id: 0, team: 0, loadout: [-1, -1, 3] });
+    expect(s.players[0]).toEqual({ id: 0, team: 0, loadout: [-1, -1, 3], look: DEFAULT_LOOK });
     guest.close();
     ep.close();
   });
@@ -202,6 +203,22 @@ describe('renaming', () => {
     bob.setName('Robert');
     await tick();
     expect(ann.state.players[2].name).toBe('Robert');
+    host.close();
+  });
+});
+
+describe('customization over the network', () => {
+  it('guests see each other\'s looks, and changes arrive mid-lobby', async () => {
+    const t = new LocalTransport();
+    const host = await HostLobby.create(t, 'Host', [3], 2, { ...DEFAULT_LOOK, camo: 7, card: 3 });
+    const ann = await GuestLobby.join(t, host.code, 'Ann', 'tok-a', [3], { ...DEFAULT_LOOK, vest: 2, headgear: 3 });
+    expect(ann.state.players[0].look).toMatchObject({ camo: 7, card: 3 });
+    expect(host.state.players[1].look).toMatchObject({ vest: 2, headgear: 3 });
+    ann.setLook({ ...DEFAULT_LOOK, camo: 4, emblem: 5 });
+    await tick();
+    expect(host.state.players[1].look).toMatchObject({ camo: 4, emblem: 5, vest: 0 });
+    const msg = host.start(1);
+    expect(msg.players.map(p => p.look.camo)).toEqual([7, 4]);
     host.close();
   });
 });

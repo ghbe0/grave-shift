@@ -1,6 +1,7 @@
 // Party lobby. The host owns the lobby state and is the only one who can change the map or mode,
 // start the match, or remove players; guests receive the state and send their name, loadout and
 // ready flag. The same two classes also relay match traffic (commands up, snapshots down).
+import { cleanLook, DEFAULT_LOOK, type Look } from '../game/look';
 import { generateCode } from './party';
 import { NetError, type HostEndpoint, type Link, type Transport } from './transport';
 
@@ -10,12 +11,12 @@ export const MODES = [
   { id: 1, name: 'Skirmish', max: 8, desc: 'Free-for-all, first to 25' },
 ];
 
-export interface LobbyPlayer { id: number; name: string; host: boolean; ready: boolean }
+export interface LobbyPlayer { id: number; name: string; host: boolean; ready: boolean; look: Look }
 export interface LobbyState { code: string; players: LobbyPlayer[]; map: number; mode: number; inMatch: boolean }
-export interface StartMsg { t: 'start'; map: number; mode: number; seed: number; players: { id: number; team: number; loadout: number[] }[] }
+export interface StartMsg { t: 'start'; map: number; mode: number; seed: number; players: { id: number; team: number; loadout: number[]; look: Look }[] }
 export type KickReason = 'kicked' | 'banned' | 'full' | 'version' | 'host-left';
 
-interface Member { id: number; name: string; token: string; ready: boolean; loadout: number[]; link: Link | null; budget: number; refilled: number; strikes: number }
+interface Member { id: number; name: string; token: string; ready: boolean; loadout: number[]; look: Look; link: Link | null; budget: number; refilled: number; strikes: number }
 
 const cleanName = (n: unknown) => (typeof n === 'string' ? n.replace(/[^\p{L}\p{N} _.-]/gu, '').trim().slice(0, 16) : '') || 'Player';
 const int = (v: unknown, lo: number, hi: number, fallback = lo) => (Number.isInteger(v) && (v as number) >= lo && (v as number) <= hi ? (v as number) : fallback);
@@ -30,7 +31,7 @@ export function cleanLobbyState(raw: any): LobbyState | null {
   if (!raw || typeof raw !== 'object' || !Array.isArray(raw.players)) return null;
   return {
     code: typeof raw.code === 'string' ? raw.code.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6) : '',
-    players: raw.players.slice(0, 16).map((p: any) => ({ id: int(p?.id, 0, 1e6), name: cleanName(p?.name), host: p?.host === true, ready: p?.ready === true })),
+    players: raw.players.slice(0, 16).map((p: any) => ({ id: int(p?.id, 0, 1e6), name: cleanName(p?.name), host: p?.host === true, ready: p?.ready === true, look: cleanLook(p?.look) })),
     map: int(raw.map, 0, 63),
     mode: int(raw.mode, 0, MODES.length - 1),
     inMatch: raw.inMatch === true,
@@ -47,6 +48,7 @@ export function cleanStart(raw: any): StartMsg {
       id: int(p?.id, 0, 1e6),
       team: int(p?.team, 0, 1e6),
       loadout: Array.isArray(p?.loadout) ? p.loadout.slice(0, 32).map((v: unknown) => int(v, -1, 1000, -1)) : [],
+      look: cleanLook(p?.look),
     })),
   };
 }
@@ -63,7 +65,7 @@ export class HostLobby {
   /** A player left or was removed (also fires mid-match). */
   onLeave: (id: number) => void = () => {};
   /** A guest connected while a match is running. */
-  onLateJoin: (id: number, loadout: number[]) => void = () => {};
+  onLateJoin: (id: number, loadout: number[], look: Look) => void = () => {};
 
   readonly selfId = 0;
   private members = new Map<number, Member>();
@@ -73,17 +75,17 @@ export class HostLobby {
   private mode = 0;
   private inMatch = false;
 
-  private constructor(readonly code: string, private endpoint: HostEndpoint, name: string, loadout: number[], private mapCount: number) {
-    this.members.set(0, { id: 0, name: cleanName(name), token: '', ready: true, loadout, link: null, budget: MSG_BURST, refilled: 0, strikes: 0 });
+  private constructor(readonly code: string, private endpoint: HostEndpoint, name: string, loadout: number[], private mapCount: number, look: Look) {
+    this.members.set(0, { id: 0, name: cleanName(name), token: '', ready: true, loadout, look: cleanLook(look), link: null, budget: MSG_BURST, refilled: 0, strikes: 0 });
     endpoint.onLink = link => this.accept(link);
   }
 
   /** Creates a party, retrying with a fresh code if the generated one is already in use. */
-  static async create(transport: Transport, name: string, loadout: number[], mapCount: number): Promise<HostLobby> {
+  static async create(transport: Transport, name: string, loadout: number[], mapCount: number, look: Look = DEFAULT_LOOK): Promise<HostLobby> {
     for (let attempt = 0; ; attempt++) {
       const code = generateCode();
       try {
-        return new HostLobby(code, await transport.host(code), name, loadout, mapCount);
+        return new HostLobby(code, await transport.host(code), name, loadout, mapCount, look);
       } catch (e) {
         if (!(e instanceof NetError && e.kind === 'code-taken') || attempt >= 4) throw e;
       }
@@ -93,7 +95,7 @@ export class HostLobby {
   get state(): LobbyState {
     return {
       code: this.code,
-      players: [...this.members.values()].map(m => ({ id: m.id, name: m.name, host: m.id === 0, ready: m.ready })),
+      players: [...this.members.values()].map(m => ({ id: m.id, name: m.name, host: m.id === 0, ready: m.ready, look: m.look })),
       map: this.map,
       mode: this.mode,
       inMatch: this.inMatch,
@@ -112,10 +114,10 @@ export class HostLobby {
         const token = String(msg.token ?? '').slice(0, 64);
         if (this.banned.has(token)) return reject('banned');
         if (this.members.size >= this.maxPlayers) return reject('full');
-        member = { id: this.nextId++, name: this.uniqueName(cleanName(msg.name)), token, ready: false, loadout: this.loadoutOf(msg.loadout), link, budget: MSG_BURST, refilled: performance.now(), strikes: 0 };
+        member = { id: this.nextId++, name: this.uniqueName(cleanName(msg.name)), token, ready: false, loadout: this.loadoutOf(msg.loadout), look: cleanLook(msg.look), link, budget: MSG_BURST, refilled: performance.now(), strikes: 0 };
         this.members.set(member.id, member);
         link.sendCtl({ t: 'welcome', id: member.id, lobby: this.state });
-        if (this.inMatch) this.onLateJoin(member.id, member.loadout);
+        if (this.inMatch) this.onLateJoin(member.id, member.loadout, member.look);
         this.sync();
         return;
       }
@@ -130,6 +132,7 @@ export class HostLobby {
       member.budget -= 1;
       if (msg.t === 'ready') member.ready = !!msg.ready;
       else if (msg.t === 'name') member.name = this.uniqueName(cleanName(msg.name), member.id);
+      else if (msg.t === 'look') member.look = cleanLook(msg.look);
       else if (msg.t === 'loadout') member.loadout = this.loadoutOf(msg.loadout);
       else return;
       this.sync();
@@ -167,6 +170,10 @@ export class HostLobby {
     me.name = this.uniqueName(cleanName(name), 0);
     this.sync();
   }
+  setLook(look: Look) {
+    this.members.get(0)!.look = cleanLook(look);
+    this.sync();
+  }
   setMap(map: number) { if (!this.inMatch && map >= 0 && map < this.mapCount) { this.map = map; this.sync(); } }
   setMode(mode: number) {
     if (this.inMatch || !MODES[mode]) return;
@@ -194,7 +201,7 @@ export class HostLobby {
   /** Starts the match for everyone in the lobby. */
   start(seed: number = (Math.random() * 2 ** 31) | 0): StartMsg {
     this.inMatch = true;
-    const msg: StartMsg = { t: 'start', map: this.map, mode: this.mode, seed, players: [...this.members.values()].map(m => ({ id: m.id, team: m.id, loadout: m.loadout })) };
+    const msg: StartMsg = { t: 'start', map: this.map, mode: this.mode, seed, players: [...this.members.values()].map(m => ({ id: m.id, team: m.id, loadout: m.loadout, look: m.look })) };
     this.broadcastCtl(msg);
     this.sync();
     return msg;
@@ -230,7 +237,7 @@ export class GuestLobby {
 
   private constructor(private link: Link) {}
 
-  static async join(transport: Transport, code: string, name: string, token: string, loadout: number[]): Promise<GuestLobby> {
+  static async join(transport: Transport, code: string, name: string, token: string, loadout: number[], look: Look = DEFAULT_LOOK): Promise<GuestLobby> {
     const link = await transport.join(code);
     const lobby = new GuestLobby(link);
     return new Promise((resolve, reject) => {
@@ -266,7 +273,7 @@ export class GuestLobby {
       };
       link.onRt = data => lobby.onFrame(data);
       link.onClose = () => leave('host-left');
-      link.sendCtl({ t: 'hello', v: PROTOCOL, name, token, loadout });
+      link.sendCtl({ t: 'hello', v: PROTOCOL, name, token, loadout, look });
     });
   }
 
@@ -274,6 +281,7 @@ export class GuestLobby {
   setLoadout(loadout: number[]) { this.link.sendCtl({ t: 'loadout', loadout }); }
   /** Asks the host to rename this player; the host cleans it and keeps names unique. */
   setName(name: string) { this.link.sendCtl({ t: 'name', name }); }
+  setLook(look: Look) { this.link.sendCtl({ t: 'look', look }); }
   sendCmd(cmd: Float32Array) { this.link.sendRt(cmd); }
   close() { this.gone = true; this.link.close(); }
 }

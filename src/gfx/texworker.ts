@@ -3,7 +3,7 @@
 import { Sim } from '../core/sim';
 
 /** Most visible first, so the level looks finished as early as possible. */
-const ORDER = [1, 0, 4, 2, 3, 8, 7, 6, 5, 9];
+const ORDER = [1, 0, 4, 2, 3, 8, 7, 6, 5, 9, 10, 11, 12, 13, 14, 15, 16];
 
 self.onmessage = async (e: MessageEvent<{ url: string; size: number }>) => {
   const sim = await Sim.load(await fetch(e.data.url));

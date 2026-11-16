@@ -11,7 +11,7 @@ export interface MaterialStream {
   cancel(): void;
 }
 
-export function streamMaterials(renderer: Renderer, sim: Sim, size: number, onLayer: (done: number, total: number) => void = () => {}): MaterialStream {
+export function streamMaterials(renderer: Renderer, sim: Sim, size: number, onLayer: (done: number, total: number, layer: number, data: Uint8Array) => void = () => {}): MaterialStream {
   const total = sim.materialLayers;
   let finished = 0;
   let cancelled = false;
@@ -21,7 +21,7 @@ export function streamMaterials(renderer: Renderer, sim: Sim, size: number, onLa
   const apply = (layer: number, data: Uint8Array, tile: number) => {
     if (cancelled) return;
     renderer.setMaterial(layer, data, tile);
-    onLayer(++finished, total);
+    onLayer(++finished, total, layer, data);
   };
   const fallback = () => {
     let layer = 0;

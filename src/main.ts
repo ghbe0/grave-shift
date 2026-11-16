@@ -13,6 +13,8 @@ import { createRenderer, TEXTURE_QUALITY, type Renderer, type TextureQuality } f
 import { clientToken, GuestLobby, HostLobby, MODES, type KickReason, type LobbyState, type StartMsg } from './netcode/lobby';
 import { codeFromUrl, normalizeCode, partyLink, setUrlCode } from './netcode/party';
 import { createTransport, NetError } from './netcode/transport';
+import { CAMOS, CARDS, cardHtml, COLORS, CROSSHAIRS, DEFAULT_LOOK, EMBLEMS, FATIGUES, HEADGEAR, loadLook, RETICLES, reticleSvg, saveLook, VESTS, type Look } from './game/look';
+import { matOffset } from './gfx/renderer';
 import { escapeHtml, Hud } from './ui/hud';
 import { LoadoutEditor } from './ui/loadout';
 
@@ -82,6 +84,11 @@ class App {
   private zoom = 1;
   /** Resolves when every procedural material layer is on the GPU. */
   materials: Promise<void> = Promise.resolve();
+  /** This player's customization, and everyone's in the current party (by player id). */
+  look: Look = loadLook();
+  private looks = new Map<number, Look>();
+  /** Small previews of each camo, cut from the generated textures. */
+  private swatches = new Map<number, ImageData>();
   private materialStream: MaterialStream | null = null;
   private rendererName = '';
   private limiter = new FrameLimiter();
@@ -93,6 +100,7 @@ class App {
   async init(): Promise<void> {
     this.sim = await loadSim();
     this.hud = new Hud(this.sim);
+    this.hud.lookOf = id => this.lookOf(id);
     this.resize();
     addEventListener('resize', () => this.resize());
     const tex = TEXTURE_QUALITY[this.settings.textures];
@@ -138,7 +146,8 @@ class App {
       $('tex-status').textContent = text;
     };
     status(`generating ${tex.label.toLowerCase()} textures...`);
-    this.materialStream = streamMaterials(this.renderer, this.sim, tex.size, (done, total) => {
+    this.materialStream = streamMaterials(this.renderer, this.sim, tex.size, (done, total, layer, data) => {
+      this.keepSwatch(layer, data, tex.size);
       status(done < total ? `generating ${tex.label.toLowerCase()} textures ${done}/${total}` : `${tex.label} textures (${tex.size} px, ${tex.anisotropy}x filtering)`);
     });
     this.materials = this.materialStream.done;
@@ -148,6 +157,71 @@ class App {
   private showRendererInfo(): void {
     const hz = this.meter.displayHz;
     $('renderer-info').textContent = [`Renderer: ${this.rendererName}`, hz ? `${hz} Hz display` : '', this.texText].filter(Boolean).join(' · ');
+  }
+
+  /** Keeps a 64 px preview of camo layers for the customize screen. */
+  private keepSwatch(layer: number, data: Uint8Array, size: number): void {
+    if (!CAMOS.some(c => c.layer === layer)) return;
+    const level = Math.max(0, Math.log2(size / 64));
+    const s = size >> level, off = matOffset(0, level, size);
+    const px = new Uint8ClampedArray(data.subarray(off, off + s * s * 4));
+    for (let i = 3; i < px.length; i += 4) px[i] = 255;
+    this.swatches.set(layer, new ImageData(px, s, s));
+    if (this.screen === 'customize') this.renderCustomize();
+  }
+
+  private lookOf(id: number): Look { return this.looks.get(id) ?? DEFAULT_LOOK; }
+  private selfId(): number { return this.host ? 0 : this.guest ? this.guest.selfId : 0; }
+
+  /** Applies a change from the customize screen: saved, shown at once, sent to the party. */
+  private setLook(look: Look): void {
+    this.look = look;
+    saveLook(look);
+    this.looks.set(this.selfId(), look);
+    this.host?.setLook(look);
+    this.guest?.setLook(look);
+    this.hud.applyLook(look);
+    this.renderCustomize();
+  }
+
+  private renderCustomize(): void {
+    const l = this.look;
+    const fill = (id: string, names: string[], value: number, offset = 0) => {
+      const sel = $<HTMLSelectElement>(id);
+      if (sel.options.length !== names.length + offset) {
+        sel.replaceChildren(...(offset ? [new Option('Team colour', '0')] : []), ...names.map((n, i) => new Option(n, String(i + offset))));
+      }
+      sel.value = String(value);
+    };
+    fill('cz-vest', VESTS.map(v => v.name), l.vest, 1);
+    fill('cz-fatigues', FATIGUES.map(f => f.name), l.fatigues);
+    fill('cz-headgear', HEADGEAR, l.headgear);
+    fill('cz-camo', CAMOS.map(c => c.name), l.camo);
+    fill('cz-reticle', RETICLES, l.reticle);
+    fill('cz-reticleColor', COLORS.map(c => c.name), l.reticleColor);
+    fill('cz-crosshair', CROSSHAIRS, l.crosshair);
+    fill('cz-crosshairColor', COLORS.map(c => c.name), l.crosshairColor);
+    fill('cz-card', CARDS.map(c => c.name), l.card);
+    fill('cz-emblem', EMBLEMS.map(e => e.name), l.emblem);
+    const sw = $<HTMLCanvasElement>('cz-camo-swatch');
+    const ctx = sw.getContext('2d')!;
+    const camo = CAMOS[l.camo];
+    const img = camo.layer >= 0 ? this.swatches.get(camo.layer) : null;
+    ctx.fillStyle = '#20252c';
+    ctx.fillRect(0, 0, sw.width, sw.height);
+    if (img) {
+      const tmp = new OffscreenCanvas(img.width, img.height);
+      tmp.getContext('2d')!.putImageData(img, 0, 0);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(tmp, 0, 0, sw.width, sw.height);
+    }
+    $('cz-camo-note').textContent = camo.layer < 0 ? 'The gun\'s own finish.' : img ? '' : 'Generating texture...';
+    $('cz-reticle-preview').innerHTML = reticleSvg(l.reticle, COLORS[l.reticleColor].css);
+    $('cz-crosshair-preview').dataset.style = String(l.crosshair);
+    $('cz-crosshair-preview').style.setProperty('--ch', COLORS[l.crosshairColor].css);
+    $('cz-card-preview').innerHTML = cardHtml(l, escapeHtml(this.name() || 'Player'));
+    const vest = l.vest ? VESTS[l.vest - 1].rgb : [1.0, 0.42, 0.12];
+    $('cz-vest-swatch').style.background = `rgb(${vest.map(v => Math.round(Math.min(1, v) * 255)).join(',')})`;
   }
 
   private name(): string { return $<HTMLInputElement>('name').value.trim(); }
@@ -200,6 +274,14 @@ class App {
     });
     $<HTMLInputElement>('join-code').onkeydown = e => { if (e.key === 'Enter') $('btn-join').click(); };
     click('btn-loadout', () => this.openLoadout('main'));
+    click('btn-customize', () => this.openCustomize('main'));
+    click('btn-lobby-customize', () => this.openCustomize('lobby'));
+    click('btn-customize-done', () => this.show(this.back));
+    for (const key of ['vest', 'fatigues', 'headgear', 'camo', 'reticle', 'reticleColor', 'crosshair', 'crosshairColor', 'card', 'emblem'] as (keyof Look)[]) {
+      const sel = $<HTMLSelectElement>(`cz-${key}`);
+      sel.onchange = () => this.setLook({ ...this.look, [key]: +sel.value });
+    }
+    this.hud.applyLook(this.look);
     click('btn-lobby-loadout', () => this.openLoadout('lobby'));
     click('btn-loadout-done', () => { if (this.editor.check()) this.show(this.back); });
     click('btn-loadout-reset', () => this.editor.reset());
@@ -274,6 +356,7 @@ class App {
     this.canvas.onclick = () => { if (this.session && this.screen === 'none') this.input.lock(); };
   }
 
+  private openCustomize(back: string): void { this.back = back; this.show('customize'); this.renderCustomize(); }
   private openLoadout(back: string): void { this.back = back; this.editor.render(); this.show('loadout'); }
   private openSettings(back: string): void {
     this.back = back;
@@ -304,14 +387,14 @@ class App {
   private startSolo(): void {
     const seed = (Math.random() * 2 ** 31) | 0;
     this.hud.setNames([{ id: 0, name: this.name() || 'You' }]);
-    this.begin({ t: 'start', map: 0, mode: 0, seed, players: [{ id: 0, team: 0, loadout: this.editor.loadout }] }, 0);
+    this.begin({ t: 'start', map: 0, mode: 0, seed, players: [{ id: 0, team: 0, loadout: this.editor.loadout, look: this.look }] }, 0);
   }
 
   private async hostParty(): Promise<void> {
     this.error('');
     $('btn-host').textContent = 'Creating...';
     try {
-      this.host = await HostLobby.create(transport, this.name() || 'Host', this.editor.loadout, this.sim.catalog.maps.length);
+      this.host = await HostLobby.create(transport, this.name() || 'Host', this.editor.loadout, this.sim.catalog.maps.length, this.look);
       this.host.onChange = st => this.renderLobby(st);
       setUrlCode(this.host.code);
       this.renderLobby(this.host.state);
@@ -327,7 +410,7 @@ class App {
     this.error('');
     $('btn-join').textContent = 'Joining...';
     try {
-      this.guest = await GuestLobby.join(transport, code, this.name() || 'Guest', clientToken(), this.editor.loadout);
+      this.guest = await GuestLobby.join(transport, code, this.name() || 'Guest', clientToken(), this.editor.loadout, this.look);
       const g = this.guest;
       g.onChange = st => this.renderLobby(st);
       g.onStart = msg => this.begin(msg, g.selfId);
@@ -350,6 +433,7 @@ class App {
   private renderLobby(st: LobbyState): void {
     this.lobby = st;
     this.hud.setNames(st.players);
+    for (const p of st.players) this.looks.set(p.id, p.look);
     const isHost = !!this.host;
     $('lobby-code').textContent = st.code;
     $<HTMLInputElement>('lobby-link').value = partyLink(st.code);
@@ -360,7 +444,7 @@ class App {
     $('btn-start').hidden = !isHost;
     $('btn-ready').hidden = isHost;
     const list = $('lobby-players');
-    list.innerHTML = st.players.map(p => `<li><span>${escapeHtml(p.name)}</span><em>${p.host ? 'host' : p.ready ? 'ready' : 'not ready'}</em>${isHost && !p.host ? `<button data-kick="${p.id}">Kick</button><button data-ban="${p.id}">Ban</button>` : ''}</li>`).join('');
+    list.innerHTML = st.players.map(p => `<li>${cardHtml(p.look, escapeHtml(p.name), true)}<span></span><em>${p.host ? 'host' : p.ready ? 'ready' : 'not ready'}</em>${isHost && !p.host ? `<button data-kick="${p.id}">Kick</button><button data-ban="${p.id}">Ban</button>` : ''}</li>`).join('');
     list.querySelectorAll<HTMLButtonElement>('[data-kick]').forEach(b => (b.onclick = () => this.host?.kick(+b.dataset.kick!)));
     list.querySelectorAll<HTMLButtonElement>('[data-ban]').forEach(b => (b.onclick = () => this.host?.ban(+b.dataset.ban!)));
     const waiting = st.players.filter(p => !p.host && !p.ready).length;
@@ -386,7 +470,9 @@ class App {
     this.session?.dispose();
     const session = new Session(this.sim, start, selfId, this.host, this.guest);
     this.session = session;
-    this.scene = new Scene(this.renderer, this.sim, session);
+    for (const p of start.players) this.looks.set(p.id, p.look);
+    this.looks.set(selfId, this.look);
+    this.scene = new Scene(this.renderer, this.sim, session, id => this.lookOf(id));
     session.onEvent = e => {
       if (!this.scene || !this.session) return;
       this.scene.handleEvent(e, this.session.view(this.settings.fov));

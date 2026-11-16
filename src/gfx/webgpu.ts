@@ -9,7 +9,7 @@ interface GpuMesh { vertices: GPUBuffer; indices: GPUBuffer; count: number; form
 const HDR: GPUTextureFormat = 'rgba16float';
 const DEPTH: GPUTextureFormat = 'depth32float';
 const SAMPLES = 4;
-const GLOBALS_FLOATS = 16 * 3 + 4 * 5 + 12 + MAX_LIGHTS * LIGHT_FLOATS;
+const GLOBALS_FLOATS = 16 * 3 + 4 * 5 + 20 + MAX_LIGHTS * LIGHT_FLOATS;
 const POST_FLOATS = 16 * 2 + 4 * 7;
 const BLOOM_LEVELS = 4;
 
@@ -17,7 +17,7 @@ export class WebGPURenderer implements Renderer {
   readonly kind = 'webgpu' as const;
   private meshes: GpuMesh[] = [];
   private globals = new Float32Array(GLOBALS_FLOATS);
-  private tiles = new Float32Array(12).fill(2);
+  private tiles = new Float32Array(20).fill(2);
   private postData = new Float32Array(POST_FLOATS);
   private globalsBuf: GPUBuffer;
   private postBuf: GPUBuffer;
@@ -270,7 +270,7 @@ export class WebGPURenderer implements Renderer {
     g.set([f.camPos[0], f.camPos[1], f.camPos[2], 1, f.sunDir[0], f.sunDir[1], f.sunDir[2], 0, f.sunColor[0], f.sunColor[1], f.sunColor[2], 3.0, f.sky[0], f.sky[1], f.sky[2], f.fog,
       Math.min(f.lightCount, MAX_LIGHTS), f.post.time, 1 / this.quality.shadowSize, VIEWMODEL_DEPTH], 48);
     g.set(this.tiles, 68);
-    g.set(f.lights.subarray(0, MAX_LIGHTS * LIGHT_FLOATS), 80);
+    g.set(f.lights.subarray(0, MAX_LIGHTS * LIGHT_FLOATS), 88);
     d.queue.writeBuffer(this.globalsBuf, 0, g);
 
     if (f.instanceCount > this.instanceCap) {

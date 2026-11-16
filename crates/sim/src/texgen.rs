@@ -4,7 +4,7 @@
 //!   detail:  rg  = tangent-space normal xy (z is rebuilt in the shader), b = metallic, a = ambient occlusion
 //! Generating at load time keeps the download small and avoids shipping third-party art.
 
-pub const LAYERS: usize = 10;
+pub const LAYERS: usize = 17;
 pub const L_CONCRETE: usize = 0;
 pub const L_FLOOR: usize = 1;
 pub const L_PAINTED: usize = 2;
@@ -15,8 +15,16 @@ pub const L_GUNMETAL: usize = 6;
 pub const L_FABRIC: usize = 7;
 pub const L_SKIN: usize = 8;
 pub const L_POLYMER: usize = 9;
+/// Weapon camos, applied in place of the polymer (and, for Gilded, the metal) on guns.
+pub const L_WOODLAND: usize = 10;
+pub const L_DIGITAL: usize = 11;
+pub const L_DESERT: usize = 12;
+pub const L_TIGER: usize = 13;
+pub const L_ARCTIC: usize = 14;
+pub const L_CARBON: usize = 15;
+pub const L_GILDED: usize = 16;
 /// Metres covered by one repeat of each layer.
-pub const TILE: [f32; LAYERS] = [3.0, 4.0, 2.0, 2.5, 2.0, 2.0, 0.4, 0.6, 0.8, 0.3];
+pub const TILE: [f32; LAYERS] = [3.0, 4.0, 2.0, 2.5, 2.0, 2.0, 0.4, 0.6, 0.8, 0.3, 0.45, 0.4, 0.45, 0.4, 0.45, 0.12, 0.5];
 
 fn hash(x: i32, y: i32, seed: u32) -> f32 {
     let mut h = (x as u32).wrapping_mul(0x8da6_b343) ^ (y as u32).wrapping_mul(0xd816_3841) ^ seed.wrapping_mul(0xcb1a_b31f);
@@ -233,6 +241,55 @@ fn sample(layer: usize, u: f32, v: f32) -> Px {
             let col = mix3(col, [0.12, 0.1, 0.06], rot * 0.7);
             let col = mix3(col, [0.16, 0.01, 0.01], wound);
             Px { albedo: col, rough: 0.55 + mottle * 0.2 - wound * 0.3, metal: 0.0, height: mottle * 0.3 + vein * 0.2 - wound * 0.5, ao: 0.85 + 0.15 * (1.0 - wound) }
+        }
+        L_WOODLAND | L_DESERT | L_ARCTIC => {
+            // Four-colour blob camouflage from two noise fields.
+            let a = fbm(u, v, 5, 4, s);
+            let b = fbm(u, v, 7, 4, s + 1);
+            let pal: [[f32; 3]; 4] = match layer {
+                L_WOODLAND => [[0.13, 0.15, 0.08], [0.06, 0.08, 0.04], [0.20, 0.14, 0.07], [0.02, 0.02, 0.02]],
+                L_DESERT => [[0.42, 0.33, 0.21], [0.30, 0.22, 0.13], [0.52, 0.44, 0.31], [0.20, 0.15, 0.10]],
+                _ => [[0.80, 0.82, 0.84], [0.55, 0.58, 0.62], [0.68, 0.70, 0.73], [0.30, 0.32, 0.35]],
+            };
+            let i = if a > 0.62 { 3 } else if b > 0.58 { 2 } else if a < 0.42 { 1 } else { 0 };
+            let grain = fbm(u, v, 96, 2, s + 2);
+            Px { albedo: scale3(pal[i], 0.9 + grain * 0.2), rough: 0.62 + grain * 0.15, metal: 0.0, height: grain * 0.25, ao: 1.0 }
+        }
+        L_DIGITAL => {
+            // Pixelated urban pattern: noise sampled on a coarse grid, so it comes out in squares.
+            let q = |x: f32| (x * 48.0).floor() / 48.0 + 0.5 / 48.0;
+            let (qu, qv) = (q(u), q(v));
+            let a = fbm(qu, qv, 6, 4, s);
+            let b = fbm(qu, qv, 12, 3, s + 1);
+            let c = if a > 0.6 { [0.05, 0.05, 0.06] } else if b > 0.55 { [0.42, 0.43, 0.45] } else if a < 0.42 { [0.62, 0.63, 0.64] } else { [0.20, 0.21, 0.23] };
+            let edge = smooth(0.0, 0.08, line(u * 48.0, 1.0).min(line(v * 48.0, 1.0)));
+            Px { albedo: c, rough: 0.6, metal: 0.0, height: edge * 0.15, ao: 0.92 + 0.08 * edge }
+        }
+        L_TIGER => {
+            // Warped horizontal stripes.
+            let warp = fbm(u, v, 4, 4, s) * 0.35;
+            let stripe = ((v * 9.0 + warp * 6.0 + (u * 2.0 * core::f32::consts::PI).sin() * 0.25) * core::f32::consts::PI).sin();
+            let breakup = fbm(u * 3.0, v, 12, 3, s + 1);
+            let black = stripe > 0.55 - breakup * 0.4;
+            let base = mix3([0.26, 0.28, 0.12], [0.36, 0.31, 0.16], fbm(u, v, 8, 3, s + 2));
+            Px { albedo: if black { [0.025, 0.025, 0.02] } else { base }, rough: 0.6, metal: 0.0, height: 0.1, ao: 1.0 }
+        }
+        L_CARBON => {
+            // 2x2 twill weave, glossy clear coat.
+            let (cu, cv) = ((u * 32.0).floor() as i32, (v * 32.0).floor() as i32);
+            let along_u = ((cu + cv).rem_euclid(4)) < 2;
+            let (fu, fv) = ((u * 32.0).fract(), (v * 32.0).fract());
+            let fibre = if along_u { (fv * core::f32::consts::PI).sin() } else { (fu * core::f32::consts::PI).sin() };
+            let sheen = if along_u { 0.055 } else { 0.035 };
+            Px { albedo: [sheen * (0.7 + 0.3 * fibre); 3], rough: 0.22 + (1.0 - fibre) * 0.12, metal: 0.0, height: fibre * 0.3, ao: 0.9 + 0.1 * fibre }
+        }
+        L_GILDED => {
+            // Polished gold with fine scratches and slightly darker hollows.
+            let fine = fbm(u, v, 64, 3, s);
+            let scratch = smooth(0.985, 1.0, noise(u * 0.03 + v, v, 512, s + 1)) + smooth(0.99, 1.0, noise(u, v * 0.02 + u, 512, s + 2));
+            let tarnish = smooth(0.55, 0.8, fbm(u, v, 5, 4, s + 3));
+            let gold = mix3([1.0, 0.77, 0.34], [0.78, 0.55, 0.22], tarnish * 0.6);
+            Px { albedo: scale3(gold, 0.92 + fine * 0.1 + scratch * 0.1), rough: 0.18 + fine * 0.1 + tarnish * 0.15 - scratch * 0.08, metal: 1.0, height: fine * 0.15 - scratch * 0.2, ao: 1.0 }
         }
         _ => {
             let stipple = fbm(u, v, 192, 2, s);

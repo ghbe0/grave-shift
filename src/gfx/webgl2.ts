@@ -58,7 +58,7 @@ uniform vec4 uGrade;
 uniform bool uShadowPass;
 uniform int uLightCount;
 uniform vec4 uLights[${MAX_LIGHTS * 3}];
-uniform vec4 uTiles[3];
+uniform vec4 uTiles[5];
 uniform sampler2D uBase;
 uniform sampler2DShadow uShadow;
 uniform sampler2DArray uMatSurface, uMatDetail;
@@ -179,7 +179,7 @@ export class WebGL2Renderer implements Renderer {
   private matSurface: WebGLTexture | null = null;
   private matDetail: WebGLTexture | null = null;
   private matSize = 0;
-  private tiles = new Float32Array(12).fill(2);
+  private tiles = new Float32Array(20).fill(2);
   private emptyVao: WebGLVertexArrayObject;
   private size: [number, number] = [1, 1];
 

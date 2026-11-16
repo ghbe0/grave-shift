@@ -62,9 +62,9 @@ export class Session {
         this.queues.set(id, q);
       };
       host.onLeave = id => { this.game.removePlayer(id); this.queues.delete(id); };
-      host.onLateJoin = (id, loadout) => {
+      host.onLateJoin = (id, loadout, look) => {
         this.game.addPlayer(id, id, this.loadout(loadout));
-        host.sendStart(id, { ...this.start, players: [...this.start.players, { id, team: id, loadout }] });
+        host.sendStart(id, { ...this.start, players: [...this.start.players, { id, team: id, loadout, look }] });
       };
     }
     if (guest) guest.onFrame = f => this.receive(f);

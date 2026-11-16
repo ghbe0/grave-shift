@@ -5,6 +5,7 @@ import type { Sim } from '../core/sim';
 import { loadModel, type Model } from '../gfx/loader';
 import { compose, invert, lookAt, mat4, mul, ortho, perspective, transformPoint } from '../gfx/mat';
 import { cubeMesh, cylinderMesh, FLAG_NOSHADOW, FLAG_VIEWMODEL, INSTANCE_FLOATS, LIGHT_FLOATS, MAT, MAX_LIGHTS, sphereMesh, type Draw, type Frame, type Renderer } from '../gfx/renderer';
+import { CAMOS, FATIGUES, VESTS, type Look } from './look';
 import type { Session, View } from './session';
 
 type RGB = [number, number, number];
@@ -137,7 +138,7 @@ export class Scene {
   /** Red screen-edge flash, 0..1. */
   hurt = 0;
 
-  constructor(private renderer: Renderer, private sim: Sim, private session: Session) {
+  constructor(private renderer: Renderer, private sim: Sim, private session: Session, private lookOf: (id: number) => Look) {
     this.cube = renderer.createMesh(cubeMesh());
     this.sphere = renderer.createMesh(sphereMesh());
     this.cylinder = renderer.createMesh(cylinderMesh());
@@ -257,14 +258,20 @@ export class Scene {
     return slug === 'arc' ? [0.3, 0.8, 1] : slug === 'stormlance' ? [0.7, 0.4, 1] : slug === 'verdict' ? [1, 0.5, 0.1] : [1, 0.85, 0.55];
   }
 
-  private drawModel(groups: Map<string, { mesh: number; shadow: boolean; batch: Batch }>, name: string, matrix: Float32Array, flags: number, shadow: boolean): Model | null {
+  /**
+   * Draws a glTF model. `camo` (a material layer, or -1) replaces the polymer furniture of a gun;
+   * the gilded finish covers the metal too.
+   */
+  private drawModel(groups: Map<string, { mesh: number; shadow: boolean; batch: Batch }>, name: string, matrix: Float32Array, flags: number, shadow: boolean, camo = -1): Model | null {
     const model = this.models.get(name);
     if (!model) return null;
     for (const part of model.parts) {
       const key = `${part.mesh}:${shadow}`;
       let g = groups.get(key);
       if (!g) groups.set(key, (g = { mesh: part.mesh, shadow, batch: new Batch() }));
-      g.batch.mat(matrix, part.color, part.layer, part.metallic, part.layer >= 0 ? 1 : part.roughness, part.emissive, flags);
+      let layer = part.layer;
+      if (camo >= 0 && (layer === MAT.polymer || (camo === MAT.gilded && layer === MAT.gunmetal))) layer = camo;
+      g.batch.mat(matrix, layer === part.layer ? part.color : [1, 1, 1], layer, part.metallic, layer >= 0 ? 1 : part.roughness, part.emissive, flags);
     }
     return model;
   }
@@ -336,8 +343,9 @@ export class Scene {
   /** A survivor: helmet, team-coloured vest over fatigues, boots, rifle held at the ready. */
   private survivor(out: Batch, glow: Batch, groups: Map<string, { mesh: number; shadow: boolean; batch: Batch }>, p: { id: number; x: number; y: number; z: number; yaw: number; rec: Float32Array }, t: number): void {
     const { P } = this.sim.L;
-    const team = PLAYER_COLORS[p.id % PLAYER_COLORS.length];
-    const fatigues: RGB = [1.6, 1.7, 1.4];
+    const look = this.lookOf(p.id);
+    const team: RGB = look.vest ? VESTS[look.vest - 1].rgb : PLAYER_COLORS[p.id % PLAYER_COLORS.length];
+    const fatigues: RGB = FATIGUES[look.fatigues]?.rgb ?? FATIGUES[0].rgb;
     const life = p.rec[P.life];
     const pitch = p.rec[P['ctl.pitch']];
     const speed = Math.hypot(p.rec[P['ctl.vel']], p.rec[P['ctl.vel'] + 2]);
@@ -370,19 +378,37 @@ export class Scene {
     // Plate carrier with pouches in the team colour.
     out.box(chest[0], chest[1] - 0.12, chest[2], 0.42, 0.42, 0.3, team, MAT.fabric, 0, 0, p.yaw);
     for (const lx of [-0.12, 0, 0.12]) { const q = at(lx, chestL[1] - 0.26, chestL[2] + 0.17); out.box(q[0], q[1], q[2], 0.1, 0.12, 0.06, team, MAT.fabric, 0, 0, p.yaw); }
-    // Head with helmet and goggles.
+    // Head and the chosen headgear.
     const head = at(0, chestL[1] + 0.27, chestL[2] + 0.02);
-    out.box(head[0], head[1], head[2], 0.2, 0.24, 0.22, [1, 0.95, 0.9], MAT.skin, 0, 0, p.yaw, pitch * 0.5);
-    out.box(head[0], head[1] + 0.09, head[2], 0.27, 0.15, 0.29, [0.6, 0.65, 0.55], MAT.painted, 0, 0, p.yaw, pitch * 0.5);
-    const goggle = at(0, chestL[1] + 0.3, chestL[2] + 0.13);
-    out.box(goggle[0], goggle[1], goggle[2], 0.2, 0.05, 0.03, [0.3, 0.3, 0.3], MAT.polymer, 0, 0, p.yaw, pitch * 0.5);
+    const hp = pitch * 0.5;
+    out.box(head[0], head[1], head[2], 0.2, 0.24, 0.22, [1, 0.95, 0.9], MAT.skin, 0, 0, p.yaw, hp);
+    switch (look.headgear) {
+      case 0: { // combat helmet and goggles
+        out.box(head[0], head[1] + 0.09, head[2], 0.27, 0.15, 0.29, [0.6, 0.65, 0.55], MAT.painted, 0, 0, p.yaw, hp);
+        const goggle = at(0, chestL[1] + 0.3, chestL[2] + 0.13);
+        out.box(goggle[0], goggle[1], goggle[2], 0.2, 0.05, 0.03, [0.3, 0.3, 0.3], MAT.polymer, 0, 0, p.yaw, hp);
+        break;
+      }
+      case 1: { // field cap with a brim
+        out.box(head[0], head[1] + 0.1, head[2], 0.23, 0.1, 0.24, fatigues, MAT.fabric, 0, 0, p.yaw, hp);
+        const brim = at(0, chestL[1] + 0.36, chestL[2] + 0.16);
+        out.box(brim[0], brim[1], brim[2], 0.2, 0.02, 0.12, fatigues, MAT.fabric, 0, 0, p.yaw, hp - 0.15);
+        break;
+      }
+      case 2: // beanie
+        out.box(head[0], head[1] + 0.08, head[2], 0.23, 0.17, 0.24, team, MAT.fabric, 0, 0, p.yaw, hp);
+        break;
+      case 3: // hood
+        out.box(head[0], head[1] + 0.03, head[2] - 0.02, 0.3, 0.33, 0.3, fatigues, MAT.fabric, 0, 0, p.yaw, hp);
+        break;
+    }
     // Arms meet on the gun, which follows the aim pitch.
     const gunAt = at(0.12, chestL[1] - 0.05, chestL[2] + 0.3);
     const gm = mat4();
     compose(gm, 0, gunAt[0], gunAt[1], gunAt[2], 1, 1, 1, p.yaw, pitch);
     const cur = p.rec[P['arms.cur']];
     const gun = p.rec[P[`arms.guns${cur}.id`]];
-    const model = this.drawModel(groups, `weapons/${this.sim.catalog.weapons[gun]?.slug}`, gm, 0, true);
+    const model = this.drawModel(groups, `weapons/${this.sim.catalog.weapons[gun]?.slug}`, gm, 0, true, CAMOS[look.camo]?.layer ?? -1);
     const grip = transformPoint(gm, [0, -0.02, 0.01]);
     const fore = transformPoint(gm, [0, 0.0, Math.max(-0.35, (model?.min[2] ?? -0.4) * 0.55)]);
     for (const [side, hand] of [[1, grip], [-1, fore]] as const) {
@@ -564,12 +590,13 @@ export class Scene {
         this.sway[0] * -2 + (me[P['arms.melee_t']] > 0.3 ? 0.9 : 0));
       const world = mul(mat4(), camWorld, local);
       const slug = sim.catalog.weapons[gunId]?.slug;
-      const model = this.drawModel(groups, `weapons/${slug}`, world, FLAG_VIEWMODEL | FLAG_NOSHADOW, false);
+      const myLook = this.lookOf(s.selfId);
+      const model = this.drawModel(groups, `weapons/${slug}`, world, FLAG_VIEWMODEL | FLAG_NOSHADOW, false, CAMOS[myLook.camo]?.layer ?? -1);
       // Arms: sleeves from below the screen edge to gloved hands on the grip and the handguard.
       const cam = (x: number, y: number, z: number) => transformPoint(camWorld, [x, y, z]) as V3;
       const grip = transformPoint(world, [0, -0.035, 0.015]) as V3;
       const fore = transformPoint(world, [0, -0.005, Math.max(-0.3, (model?.min[2] ?? -0.35) * 0.62)]) as V3;
-      const sleeve: RGB = [1.4, 1.5, 1.25];
+      const sleeve: RGB = FATIGUES[myLook.fatigues]?.rgb ?? FATIGUES[0].rgb;
       const vf = FLAG_VIEWMODEL | FLAG_NOSHADOW;
       // Only forearms are visible: they enter from below the screen edge, like a real first-person view.
       const rElbow = cam(0.24 - ads * 0.1, -0.42, -0.2), lElbow = cam(-0.1 + ads * 0.04, -0.4, -0.32);
