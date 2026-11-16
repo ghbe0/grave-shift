@@ -286,7 +286,7 @@ pub extern "C" fn gs_str(kind: u32, a: u32, b: u32, which: u32) -> u32 {
 }
 
 /// Numeric catalog data. Weapons: 0 class, 1 damage, 2 rpm, 3 mag, 4 reserve, 5 reload, 6 zoom,
-/// 7 cost, 8 flags, 9 auto, 10 range. Attachments: 0 class mask. Perks: 0 cost. Streaks: 0 score.
+/// 7 cost, 8 flags, 9 auto, 10 range, 11 burst. Attachments: 0 class mask. Perks: 0 cost. Streaks: 0 score.
 /// Abilities: 0 kind. Tonics: 0 kind, 1 amount, 2 rare.
 #[no_mangle]
 pub extern "C" fn gs_stat(kind: u32, id: u32, field: u32) -> f32 {
@@ -304,6 +304,7 @@ pub extern "C" fn gs_stat(kind: u32, id: u32, field: u32) -> f32 {
             7 => w.cost as f32,
             8 => w.flags as f32,
             9 => w.auto as u32 as f32,
+            11 => w.burst as f32,
             _ => w.r1,
         }),
         K_ATTACHMENT => ATTACHMENTS.get(i).map_or(0.0, |a| a.2 as f32),

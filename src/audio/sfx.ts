@@ -53,6 +53,12 @@ export class Sfx {
     this.burst(0.5 * k, 0.12 + heavy * 0.12, 1800 - heavy * 900);
     this.tone(220 - heavy * 90, 50, 0.1 + heavy * 0.08, 0.45 * k, 'triangle');
   }
+  /** Rocket launch: a short thump and a rushing hiss. */
+  rocket(distant = false): void {
+    const k = distant ? 0.4 : 1;
+    this.tone(140, 45, 0.25, 0.5 * k, 'triangle');
+    this.burst(0.45 * k, 0.6, 1200, 'bandpass');
+  }
   energy(): void { this.tone(900, 120, 0.25, 0.35, 'sawtooth'); this.burst(0.2, 0.2, 3000, 'highpass'); }
   dry(): void { this.tone(1400, 900, 0.03, 0.15, 'square'); }
   reload(): void { this.burst(0.2, 0.05, 2500, 'highpass'); setTimeout(() => this.burst(0.25, 0.06, 1500), 220); }

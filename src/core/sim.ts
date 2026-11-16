@@ -19,7 +19,23 @@ export type Offsets = Record<string, number>;
 export interface Layout { P: Offsets; H: Offsets; Z: Offsets; E: Offsets; V: Offsets }
 
 export interface Item { id: number; name: string; desc: string }
-export interface WeaponInfo extends Item { slug: string; cls: number; damage: number; rpm: number; mag: number; reserve: number; reload: number; zoom: number; cost: number; flags: number; auto: boolean; range: number }
+export interface WeaponInfo extends Item { slug: string; cls: number; damage: number; rpm: number; mag: number; reserve: number; reload: number; zoom: number; cost: number; flags: number; auto: boolean; range: number; burst: number }
+
+/** Weapon classes (`catalog.rs` C_*), in menu order. */
+export const WEAPON_CLASSES = ['Pistols', 'Submachine Guns', 'Assault Rifles', 'Shotguns', 'Light Machine Guns', 'Marksman & Sniper Rifles', 'Special', 'Launchers'];
+export const CLASS_ORDER = [2, 1, 3, 4, 5, 0, 7];
+/** Weapon flags (`catalog.rs` WF_*). */
+export const WF = { crate: 1, wonder: 2, ability: 4, chain: 8, rocket: 16 } as const;
+
+/** How the trigger works, for menus and the HUD. */
+export function fireMode(w: WeaponInfo): string {
+  if (w.flags & WF.rocket) return 'Single shot';
+  if (w.auto) return 'Full auto';
+  if (w.burst > 1) return `${w.burst}-round burst`;
+  if (w.cls === 5 && w.rpm <= 60) return 'Bolt action';
+  if (w.cls === 3 && w.mag <= 2) return 'Break action';
+  return w.cls === 3 ? 'Pump action' : 'Semi-auto';
+}
 export interface Catalog {
   weapons: WeaponInfo[];
   attachments: (Item & { classMask: number })[];
@@ -95,7 +111,7 @@ export class Sim {
     return {
       weapons: list(Kind.weapon, id => {
         const s = (f: number) => this.stat(Kind.weapon, id, f);
-        return { slug: this.str(Kind.weapon, id, 0, 1), cls: s(0), damage: s(1), rpm: s(2), mag: s(3), reserve: s(4), reload: s(5), zoom: s(6), cost: s(7), flags: s(8), auto: s(9) > 0, range: s(10) };
+        return { slug: this.str(Kind.weapon, id, 0, 1), cls: s(0), damage: s(1), rpm: s(2), mag: s(3), reserve: s(4), reload: s(5), zoom: s(6), cost: s(7), flags: s(8), auto: s(9) > 0, range: s(10), burst: s(11) };
       }),
       attachments: list(Kind.attachment, id => ({ classMask: this.stat(Kind.attachment, id) })),
       perks: list(Kind.perk, id => ({ cost: this.stat(Kind.perk, id) })),

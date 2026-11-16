@@ -1,11 +1,18 @@
 // Ten-point loadout editor. The rules live in Rust (`loadout.rs`); this only builds the form and
 // asks the core to validate, so the UI can never disagree with what the host accepts.
-import type { Sim } from '../core/sim';
+import { CLASS_ORDER, WEAPON_CLASSES, fireMode, type Sim, type WeaponInfo } from '../core/sim';
 
 const STORE = 'gs.loadout';
 const ERRORS = ['', 'Over the 10-point budget', 'Unknown item', 'Item in the wrong slot', 'Needs a wildcard', 'Duplicate item', 'Attachment does not fit that weapon'];
 
-interface Slot { index: number; label: string; options: () => { id: number; name: string; desc?: string }[] }
+interface Option { id: number; name: string; desc?: string; group?: string }
+interface Slot { index: number; label: string; options: () => Option[] }
+
+/** One line of numbers for a weapon's tooltip. */
+function weaponSummary(w: WeaponInfo): string {
+  const rate = w.flags & 16 ? '' : ` · ${Math.round(w.rpm)} rpm`;
+  return `${fireMode(w)} · damage ${Math.round(w.damage)}${rate} · ${w.mag} rounds · reload ${w.reload.toFixed(1)} s`;
+}
 
 export function savedLoadout(sim: Sim): number[] {
   try {
@@ -25,7 +32,15 @@ export class LoadoutEditor {
 
   private groups(): [string, Slot[]][] {
     const c = this.sim.catalog;
-    const weapons = (primary: boolean) => () => c.weapons.filter(w => w.cls !== 6 && (primary ? w.cls !== 0 : true));
+    // Primaries: every class but pistols and launchers. Secondaries: pistols and launchers, or a
+    // primary with the Heavy wildcard (the core enforces that).
+    const weapons = (primary: boolean) => () => CLASS_ORDER
+      .filter(k => !primary || (k !== 0 && k !== 7))
+      .sort((a, b) => primary ? 0 : +(a !== 0 && a !== 7) - +(b !== 0 && b !== 7))
+      .flatMap(k => {
+        const heavy = !primary && k !== 0 && k !== 7;
+        return c.weapons.filter(w => w.cls === k).map(w => ({ id: w.id, name: w.name, desc: weaponSummary(w), group: WEAPON_CLASSES[k] + (heavy ? ' (Heavy Hitter wildcard)' : '') }));
+      });
     const atts = (weaponSlot: number) => () => {
       const w = c.weapons[this.loadout[weaponSlot]];
       return w ? c.attachments.filter(a => a.classMask & (1 << w.cls)) : [];
@@ -55,10 +70,16 @@ export class LoadoutEditor {
         const sel = document.createElement('select');
         sel.setAttribute('aria-label', `${title} ${slot.label}`);
         sel.add(new Option(`- ${slot.label} -`, '-1'));
+        let group: HTMLOptGroupElement | null = null;
         for (const o of slot.options()) {
           const opt = new Option(o.name, String(o.id));
           if (o.desc) opt.title = o.desc;
-          sel.add(opt);
+          if (o.group && o.group !== group?.label) {
+            group = document.createElement('optgroup');
+            group.label = o.group;
+            sel.append(group);
+          }
+          (o.group && group ? group : sel).append(opt);
         }
         sel.value = String(this.loadout[slot.index]);
         if (sel.selectedIndex < 0) sel.value = '-1';

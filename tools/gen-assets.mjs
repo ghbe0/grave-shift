@@ -32,18 +32,18 @@ const texture = png(32, 32, (x, y) => {
 
 const FACES = [[[1, 0, 0], [0, 0, -1], [0, 1, 0]], [[-1, 0, 0], [0, 0, 1], [0, 1, 0]], [[0, 1, 0], [1, 0, 0], [0, 0, -1]], [[0, -1, 0], [1, 0, 0], [0, 0, 1]], [[0, 0, 1], [1, 0, 0], [0, 1, 0]], [[0, 0, -1], [-1, 0, 0], [0, 1, 0]]];
 
-/** Rotates a point/normal about the X axis (pitch) then Y (yaw). */
-const rot = (p, rx = 0, ry = 0) => {
-  const [x, y, z] = p;
+/** Rotates a point/normal about the Z axis (roll), then X (pitch), then Y (yaw). */
+const rot = (p, rx = 0, ry = 0, rz = 0) => {
+  const [x, y, z] = [p[0] * Math.cos(rz) - p[1] * Math.sin(rz), p[0] * Math.sin(rz) + p[1] * Math.cos(rz), p[2]];
   const y1 = y * Math.cos(rx) - z * Math.sin(rx), z1 = y * Math.sin(rx) + z * Math.cos(rx);
   return [x * Math.cos(ry) + z1 * Math.sin(ry), y1, -x * Math.sin(ry) + z1 * Math.cos(ry)];
 };
 
-/** Appends a part's triangles. Parts: { box: [w, h, d] } or { cyl: [radius, length], seg? } along Z, with c (centre), rx/ry (radians), m (material). */
+/** Appends a part's triangles. Parts: { box: [w, h, d] } or { cyl: [radius, length], seg? } along Z, with c (centre), rx/ry/rz (radians), m (material). */
 function emit(part, mesh) {
-  const { c, rx = 0, ry = 0 } = part;
+  const { c, rx = 0, ry = 0, rz = 0 } = part;
   const add = (p, n, u, v) => {
-    const q = rot(p, rx, ry), nn = rot(n, rx, ry);
+    const q = rot(p, rx, ry, rz), nn = rot(n, rx, ry, rz);
     mesh.pos.push(q[0] + c[0], q[1] + c[1], q[2] + c[2]);
     mesh.nrm.push(...nn);
     mesh.uv.push(u, v);
@@ -151,7 +151,7 @@ const rail = (z0, z1, y, m = M.metal) => {
  * len: receiver length, barrel: exposed barrel, mag: magazine height (0 none), stock: stock length,
  * guard: handguard length, scope, drum, pump, bulk (receiver height).
  */
-function gun({ len, barrel, mag = 0, stock = 0, guard = 0, scope = false, drum = false, pump = false, bulk = 0.06, muzzle = 'brake', accent }) {
+function gun({ len, barrel, mag = 0, stock = 0, guard = 0, scope = false, drum = false, pump = false, bulk = 0.06, muzzle = 'brake', bipod = false, bolt = false, ammoBox = false, accent }) {
   const top = 0.03 + bulk / 2;
   const front = -len;
   const p = [
@@ -181,9 +181,31 @@ function gun({ len, barrel, mag = 0, stock = 0, guard = 0, scope = false, drum =
     for (const z of [-0.008, -0.022, -0.036]) p.push({ box: [0.03, 0.006, 0.004], c: [0, 0.035, tip + z], m: M.dark });
   } else if (muzzle === 'suppressor') {
     p.push({ cyl: [0.018, 0.16], c: [0, 0.035, tip - 0.07], m: M.polymer });
+  } else if (muzzle === 'flash') {
+    // Pronged flash hider.
+    for (let k = 0; k < 4; k++) {
+      const a = (k / 4) * Math.PI * 2 + Math.PI / 4;
+      p.push({ box: [0.005, 0.005, 0.04], c: [Math.cos(a) * 0.009, 0.035 + Math.sin(a) * 0.009, tip - 0.018], m: M.metal });
+    }
+  }
+  if (bipod) {
+    // Folded bipod legs under the handguard.
+    for (const x of [-0.014, 0.014]) p.push({ box: [0.007, 0.007, 0.16], c: [x, 0.012, front - 0.04], m: M.metal });
+    p.push({ box: [0.036, 0.014, 0.02], c: [0, 0.018, front + 0.03], m: M.metal });
+  }
+  if (bolt) {
+    // Bolt handle with a round knob on the right side.
+    p.push({ box: [0.04, 0.008, 0.008], c: [0.03, top - 0.008, 0.0], m: M.metal });
+    p.push({ cyl: [0.009, 0.014], c: [0.052, top - 0.008, 0.0], ry: Math.PI / 2, m: M.metal });
+  }
+  if (ammoBox) {
+    // Belt box hanging under the receiver.
+    p.push({ box: [0.07, 0.1, 0.11], c: [0, -0.07, -len * 0.42], m: M.polymer });
+    p.push({ box: [0.072, 0.01, 0.112], c: [0, -0.02, -len * 0.42], m: M.metal });
+    p.push({ box: [0.03, 0.012, 0.03], c: [0.04, -0.055, -len * 0.42], m: M.dark });
   }
   p.push({ box: [0.006, 0.026, 0.008], c: [0, 0.06, tip + 0.03], m: M.metal }); // front sight
-  if (mag) {
+  if (mag && !ammoBox) {
     if (drum) p.push({ cyl: [0.06, 0.05], c: [0, -0.06, -len * 0.42], ry: Math.PI / 2, m: M.polymer });
     else p.push({ box: [0.026, mag, 0.05], c: [0, -mag / 2 + 0.005, -len * 0.42], rx: 0.18, m: M.polymer });
   }
@@ -209,7 +231,7 @@ function gun({ len, barrel, mag = 0, stock = 0, guard = 0, scope = false, drum =
 }
 
 /** Handgun: slide, frame and grip. */
-function pistol({ len = 0.19, accent, auto = false }) {
+function pistol({ len = 0.19, accent, auto = false, comp = false }) {
   const p = [
     { box: [0.028, 0.032, len], c: [0, 0.045, -len / 2 + 0.03], m: M.metal }, // slide
     { box: [0.006, 0.02, 0.05], c: [0.0145, 0.05, -0.02], m: M.dark }, // serrations
@@ -222,7 +244,121 @@ function pistol({ len = 0.19, accent, auto = false }) {
     { box: [0.03, 0.004, len * 0.3], c: [0, 0.062, -len * 0.4], m: M.accent },
   ];
   if (auto) p.push({ box: [0.022, 0.13, 0.04], c: [0, -0.1, 0.0], rx: -0.22, m: M.polymer }, { cyl: [0.016, 0.1], c: [0, 0.045, -len - 0.02], m: M.polymer });
+  if (comp) {
+    // Compensator with top ports, and an extended magazine for the burst.
+    p.push({ box: [0.03, 0.034, 0.04], c: [0, 0.045, -len + 0.01], m: M.metal });
+    for (const z of [-0.004, -0.016]) p.push({ box: [0.014, 0.006, 0.006], c: [0, 0.062, -len + 0.01 + z], m: M.dark });
+    p.push({ box: [0.022, 0.05, 0.035], c: [0, -0.115, 0.03], rx: -0.22, m: M.polymer });
+  }
   return glb(p, mats(accent));
+}
+
+/** Bullpup rifle: the magazine sits behind the grip and the receiver runs back to the shoulder. */
+function bullpup({ len = 0.6, barrel = 0.1, accent }) {
+  const back = 0.17, front = back - len;
+  const p = [
+    { box: [0.046, 0.085, len], c: [0, 0.035, back - len / 2], m: M.polymer }, // shell
+    { box: [0.04, 0.026, len * 0.5], c: [0, 0.09, front + len * 0.42], m: M.polymer }, // top housing
+    ...rail(front + 0.04, back - 0.12, 0.105),
+    { box: [0.03, 0.1, 0.038], c: [0, -0.045, 0.012], rx: -0.28, m: M.polymer }, // grip
+    { box: [0.032, 0.012, 0.09], c: [0, -0.1, -0.02], m: M.polymer }, // full-hand trigger guard
+    { box: [0.012, 0.06, 0.012], c: [0, -0.06, -0.065], m: M.polymer },
+    { box: [0.004, 0.022, 0.006], c: [0, -0.012, -0.022], rx: 0.3, m: M.metal }, // trigger
+    { box: [0.026, 0.15, 0.05], c: [0, -0.07, 0.13], rx: 0.12, m: M.polymer }, // magazine behind the grip
+    { box: [0.008, 0.02, 0.06], c: [0.024, 0.05, 0.1], m: M.dark }, // ejection port
+    { box: [0.05, 0.095, 0.018], c: [0, 0.035, back + 0.008], m: M.dark }, // butt pad
+    { box: [0.048, 0.03, 0.16], c: [0, -0.015, front + 0.1], m: M.polymer }, // fore-end
+    { cyl: [0.0085, barrel + 0.04], c: [0, 0.04, front - barrel / 2 + 0.02], m: M.metal }, // barrel
+    { cyl: [0.013, 0.045], c: [0, 0.04, front - barrel - 0.01], seg: 10, m: M.metal }, // muzzle
+    { box: [0.03, 0.03, 0.04], c: [0, 0.128, front + 0.2], m: M.metal }, // reflex sight
+    { box: [0.02, 0.018, 0.002], c: [0, 0.135, front + 0.179], m: M.glass },
+    { box: [0.048, 0.006, len * 0.35], c: [0, 0.062, back - len * 0.3], m: M.accent }, // accent stripe
+  ];
+  return glb(p, mats(accent));
+}
+
+/** Break-action double-barrel shotgun. */
+function doubleBarrel({ accent }) {
+  const p = [
+    { box: [0.04, 0.05, 0.12], c: [0, 0.03, -0.04], m: M.metal }, // action
+    { box: [0.03, 0.1, 0.038], c: [0, -0.045, 0.012], rx: -0.28, m: M.polymer }, // grip
+    { box: [0.036, 0.07, 0.24], c: [0, 0.0, 0.17], rx: 0.12, m: M.polymer }, // stock
+    { box: [0.04, 0.09, 0.016], c: [0, -0.016, 0.29], rx: 0.12, m: M.dark }, // butt pad
+    { box: [0.006, 0.006, 0.05], c: [0, -0.03, -0.035], m: M.metal }, // trigger guard
+    { box: [0.004, 0.022, 0.006], c: [0, -0.012, -0.022], rx: 0.3, m: M.metal }, // triggers
+    { box: [0.004, 0.022, 0.006], c: [0, -0.012, -0.034], rx: 0.3, m: M.metal },
+    { box: [0.036, 0.03, 0.2], c: [0, 0.012, -0.22], m: M.polymer }, // fore-end
+    { box: [0.012, 0.012, 0.02], c: [0, 0.064, 0.01], m: M.metal }, // top lever
+    { box: [0.042, 0.012, 0.03], c: [0, 0.03, -0.1], m: M.dark }, // hinge
+    { box: [0.04, 0.004, 0.36], c: [0, 0.058, -0.29], m: M.metal }, // sighting rib
+    { box: [0.006, 0.006, 0.006], c: [0, 0.063, -0.47], m: M.accent }, // bead
+    { box: [0.038, 0.012, 0.1], c: [0, -0.008, 0.12], rx: 0.12, m: M.accent }, // stock inlay
+  ];
+  for (const x of [-0.0105, 0.0105]) {
+    p.push({ cyl: [0.0105, 0.4], c: [x, 0.04, -0.29], seg: 12, m: M.metal });
+    p.push({ cyl: [0.0075, 0.002], c: [x, 0.04, -0.491], m: M.dark }); // bore
+  }
+  return glb(p, mats(accent));
+}
+
+/** Six-shot revolver with a long barrel. */
+function revolver({ accent }) {
+  const p = [
+    { box: [0.026, 0.05, 0.08], c: [0, 0.04, -0.02], m: M.metal }, // frame
+    { cyl: [0.022, 0.045], c: [0, 0.042, -0.035], seg: 6, m: M.metal }, // cylinder
+    { cyl: [0.0085, 0.16], c: [0, 0.055, -0.135], m: M.metal }, // barrel
+    { box: [0.012, 0.016, 0.16], c: [0, 0.042, -0.135], m: M.metal }, // ejector shroud
+    { box: [0.008, 0.008, 0.15], c: [0, 0.067, -0.13], m: M.metal }, // top rib
+    { box: [0.004, 0.012, 0.008], c: [0, 0.075, -0.205], m: M.accent }, // front sight
+    { box: [0.012, 0.018, 0.016], c: [0, 0.068, 0.022], rx: -0.4, m: M.metal }, // hammer
+    { box: [0.028, 0.1, 0.04], c: [0, -0.035, 0.022], rx: -0.32, m: M.polymer }, // grip
+    { box: [0.005, 0.005, 0.04], c: [0, -0.002, -0.02], m: M.metal }, // trigger guard
+    { box: [0.004, 0.02, 0.006], c: [0, 0.008, -0.012], rx: 0.3, m: M.metal }, // trigger
+    { box: [0.03, 0.02, 0.03], c: [0, -0.02, 0.018], rx: -0.32, m: M.accent }, // grip medallion band
+  ];
+  for (let k = 0; k < 6; k++) {
+    const a = (k / 6) * Math.PI * 2;
+    p.push({ box: [0.004, 0.004, 0.046], c: [Math.cos(a) * 0.021, 0.042 + Math.sin(a) * 0.021, -0.035], m: M.dark }); // flutes
+  }
+  return glb(p, mats(accent));
+}
+
+/** Shoulder-fired rocket launcher: a long tube with a sight, grips and a loaded rocket nose. */
+function launcher({ accent }) {
+  // The tube mostly runs forward of the grip so it does not fill the screen in first person.
+  const p = [
+    { cyl: [0.036, 0.84], c: [0, 0.06, -0.33], seg: 16, m: M.polymer }, // tube
+    { cyl: [0.043, 0.05], c: [0, 0.06, -0.74], seg: 16, m: M.metal }, // front ring
+    { cyl: [0.045, 0.06], c: [0, 0.06, 0.1], seg: 16, m: M.metal }, // rear venturi
+    { cyl: [0.026, 0.002], c: [0, 0.06, 0.131], seg: 16, m: M.dark },
+    { cyl: [0.041, 0.03], c: [0, 0.06, -0.3], seg: 16, m: M.accent }, // bands
+    { cyl: [0.041, 0.03], c: [0, 0.06, -0.05], seg: 16, m: M.accent },
+    { box: [0.03, 0.1, 0.038], c: [0, -0.045, 0.012], rx: -0.28, m: M.polymer }, // grip
+    { box: [0.03, 0.09, 0.034], c: [0, -0.035, -0.32], rx: -0.15, m: M.polymer }, // front grip
+    { box: [0.006, 0.006, 0.05], c: [0, -0.03, -0.035], m: M.metal }, // trigger guard
+    { box: [0.004, 0.022, 0.006], c: [0, -0.012, -0.022], rx: 0.3, m: M.metal }, // trigger
+    { box: [0.036, 0.03, 0.12], c: [0, 0.02, -0.02], m: M.metal }, // grip mount
+    { box: [0.02, 0.05, 0.07], c: [-0.055, 0.1, -0.24], m: M.metal }, // side sight
+    { box: [0.016, 0.016, 0.002], c: [-0.055, 0.11, -0.276], m: M.glass },
+    { box: [0.024, 0.014, 0.05], c: [-0.032, 0.085, -0.24], m: M.metal }, // sight bracket
+    { box: [0.046, 0.026, 0.09], c: [0, 0.095, 0.03], m: M.polymer }, // shoulder rest
+  ];
+  return glb(p, mats(accent));
+}
+
+/** The rocket in flight (and loaded in the launcher): points down -Z. */
+function rocket() {
+  const p = [
+    { cyl: [0.03, 0.26], c: [0, 0, 0], seg: 12, m: M.accent },
+    { cyl: [0.022, 0.05], c: [0, 0, -0.155], seg: 12, m: M.accent },
+    { cyl: [0.012, 0.04], c: [0, 0, -0.2], seg: 12, m: M.metal },
+    { cyl: [0.024, 0.04], c: [0, 0, 0.15], seg: 12, m: M.metal },
+  ];
+  for (let k = 0; k < 4; k++) {
+    const a = (k / 4) * Math.PI * 2;
+    p.push({ box: [0.004, 0.05, 0.06], c: [Math.cos(a) * 0.04, Math.sin(a) * 0.04, 0.13], rz: a, m: M.metal });
+  }
+  return glb(p, mats(paint([0.42, 0.48, 0.3])));
 }
 
 const models = {
@@ -237,6 +373,19 @@ const models = {
   'weapons/arc': gun({ len: 0.44, barrel: 0.12, mag: 0.12, stock: 0.2, guard: 0.26, bulk: 0.085, muzzle: 'none', accent: glow([0.25, 0.75, 1.0]) }),
   'weapons/stormlance': gun({ len: 0.48, barrel: 0.24, mag: 0, stock: 0.22, guard: 0.3, bulk: 0.09, muzzle: 'none', accent: glow([0.7, 0.4, 1.0]) }),
   'weapons/verdict': pistol({ len: 0.26, accent: glow([1.0, 0.6, 0.15]) }),
+  'weapons/talon': gun({ len: 0.44, barrel: 0.14, mag: 0.16, stock: 0.25, guard: 0.24, muzzle: 'flash', accent: paint([0.62, 0.55, 0.42]) }),
+  'weapons/mako': bullpup({ len: 0.6, barrel: 0.1, accent: paint([0.2, 0.35, 0.5]) }),
+  'weapons/wasp': gun({ len: 0.26, barrel: 0.05, mag: 0.24, stock: 0.15, guard: 0.1, bulk: 0.07, muzzle: 'flash', accent: paint([0.9, 0.75, 0.1]) }),
+  'weapons/bastion': gun({ len: 0.32, barrel: 0.06, mag: 0.16, stock: 0.2, guard: 0.12, bulk: 0.085, muzzle: 'suppressor', accent: paint([0.3, 0.32, 0.28]) }),
+  'weapons/reaper': gun({ len: 0.4, barrel: 0.2, mag: 0.1, drum: true, stock: 0.26, guard: 0.22, bulk: 0.08, accent: paint([0.55, 0.12, 0.1]) }),
+  'weapons/twinfang': doubleBarrel({ accent: paint([0.4, 0.25, 0.15]) }),
+  'weapons/torrent': gun({ len: 0.56, barrel: 0.28, mag: 0.1, ammoBox: true, stock: 0.28, guard: 0.3, bulk: 0.09, bipod: true, accent: paint([0.35, 0.4, 0.25]) }),
+  'weapons/hawkeye': gun({ len: 0.46, barrel: 0.3, mag: 0.09, stock: 0.28, guard: 0.28, scope: true, muzzle: 'flash', accent: paint([0.45, 0.42, 0.35]) }),
+  'weapons/monolith': gun({ len: 0.56, barrel: 0.46, mag: 0.1, stock: 0.32, guard: 0.22, scope: true, bulk: 0.08, bipod: true, bolt: true, accent: paint([0.15, 0.17, 0.2]) }),
+  'weapons/mamba': revolver({ accent: paint([0.7, 0.55, 0.2]) }),
+  'weapons/rattler': pistol({ len: 0.21, accent: paint([0.2, 0.55, 0.45]), comp: true }),
+  'weapons/comet': launcher({ accent: paint([0.35, 0.45, 0.2]) }),
+  'props/rocket': rocket(),
   'props/generator': glb([
     { box: [1.6, 1.1, 1.0], c: [0, 0.65, 0], m: M.accent },
     { box: [1.7, 0.1, 1.1], c: [0, 0.05, 0], m: M.metal },

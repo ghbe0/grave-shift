@@ -74,6 +74,20 @@ pub const MSG_REWARD: f32 = 4.0;
 pub const E_FRAG: u8 = 1;
 pub const E_IMPACT: u8 = 2;
 pub const E_STUN: u8 = 3;
+/// A launcher rocket: flies straight and explodes on contact. On the wire its `a` is the packed
+/// flight direction (see `pack_dir`); on the host, its zombie damage.
+pub const E_ROCKET: u8 = 4;
+pub const ROCKET_SPEED: f32 = 40.0;
+const ROCKET_RADIUS: f32 = 5.0;
+
+/// A direction as one exactly representable number: yaw and pitch, 9 bits each
+/// (yaw = atan2(-x, -z), pitch = asin(y), the same angles the renderer uses).
+pub fn pack_dir(v: V3) -> f32 {
+    let n = v.norm();
+    let (yaw, pitch) = ((-n.x).atan2(-n.z), n.y.clamp(-1.0, 1.0).asin());
+    let q = |x: f32, lo: f32, span: f32| (((x - lo) / span) * 511.0).round().clamp(0.0, 511.0);
+    q(yaw, -core::f32::consts::PI, core::f32::consts::TAU) * 512.0 + q(pitch, -core::f32::consts::FRAC_PI_2, core::f32::consts::PI)
+}
 pub const E_POWERUP: u8 = 10; // + powerup kind
 pub const E_CINDER: u8 = 20;
 pub const E_STARBURST: u8 = 21;
@@ -606,6 +620,15 @@ impl Game {
         let origin = p.ctl.eye_pos();
         let dir = look_dir(c.yaw, c.pitch);
         let spread = lerp(s.hip, s.ads, p.arms.ads) * if p.ctl.grounded { 1.0 } else { 1.4 };
+        if s.flags & WF_ROCKET != 0 {
+            let d = spread_dir(dir, spread, c.seq, 0, p.id as u32);
+            // Launched from just in front of the eye, but never from inside a wall.
+            let ahead = self.map.world.raycast(origin, d, 0.6).map_or(0.6, |h| (h.0 - 0.05).max(0.0));
+            let pos = origin + d * ahead;
+            self.ents.push(Ent { kind: E_ROCKET, pos, vel: d * ROCKET_SPEED, t: 3.0, owner: p.id, a: s.dmg });
+            self.ev(EV_SHOT, &[p.id as f32, gun.id as f32, pos.x, pos.y, pos.z, 0.0]);
+            return;
+        }
         // Lag compensation: remote shooters are evaluated against the world they were looking at,
         // bounded so a client cannot claim an arbitrarily old view.
         let view_t = if p.id == self.local { self.time } else { c.rt.clamp(self.time - REWIND_MAX, self.time) };
@@ -860,6 +883,10 @@ impl Game {
 
     /// Radial damage. `zdmg` applies to zombies, `pdmg` to players (skirmish only; owner takes half).
     pub fn explode(&mut self, pos: V3, r: f32, zdmg: f32, pdmg: f32, owner: i32) {
+        self.explode_by(pos, r, zdmg, pdmg, owner, -2);
+    }
+    /// `explode` crediting a weapon in the kill feed (-2: generic explosive).
+    pub fn explode_by(&mut self, pos: V3, r: f32, zdmg: f32, pdmg: f32, owner: i32, weapon: i32) {
         self.ev(EV_EXPLODE, &[pos.x, pos.y, pos.z, r, 0.0]);
         let oi = self.idx(owner).map_or(-1, |i| i as i32);
         let hit: Vec<(i32, f32)> = self.sv.zombies.iter().filter(|z| z.state != Z_DEAD).map(|z| (z.id, z.pos.dist(pos))).filter(|z| z.1 < r).collect();
@@ -871,7 +898,7 @@ impl Game {
                 let d = self.slots[j].p.ctl.pos.dist(pos);
                 if d < r {
                     let own = if j as i32 == oi { 0.5 } else { 1.0 };
-                    self.damage_player(j, pdmg * (1.0 - 0.7 * d / r) * own, oi, -2, true, pos);
+                    self.damage_player(j, pdmg * (1.0 - 0.7 * d / r) * own, oi, weapon, true, pos);
                 }
             }
         }
@@ -1052,6 +1079,35 @@ impl Game {
                     }
                     boom = done;
                 }
+                E_ROCKET => {
+                    let step = e.vel * dt;
+                    let len = step.len();
+                    let d = step.norm();
+                    let mut reach = self.map.world.raycast(e.pos, d, len).map(|h| h.0);
+                    // Direct hits: the first body the flight path passes through this tick.
+                    let mut touch = |c: V3, r: f32| {
+                        let along = (c - e.pos).dot(d).clamp(0.0, len);
+                        if (e.pos + d * along).dist(c) < r && reach.map_or(true, |t| along < t) {
+                            reach = Some(along);
+                        }
+                    };
+                    for z in self.sv.zombies.iter().filter(|z| z.state != Z_DEAD && z.state != Z_TURNED) {
+                        touch(z.pos + v3(0.0, Z_BODY * 0.55, 0.0), Z_RADIUS + 0.3);
+                    }
+                    if self.mode == MODE_SKIRMISH {
+                        for o in self.slots.iter().filter(|o| o.p.id != e.owner && o.p.life == ALIVE) {
+                            touch(o.p.ctl.pos + v3(0.0, o.p.ctl.height() * 0.5, 0.0), RADIUS + 0.3);
+                        }
+                    }
+                    match reach {
+                        Some(t) => {
+                            e.pos += d * (t - 0.05).max(0.0);
+                            done = true;
+                        }
+                        None => e.pos += step,
+                    }
+                    boom = true; // on contact, or in the air when its fuel runs out
+                }
                 E_CINDER => {
                     let ids: Vec<(i32, f32)> = self.sv.zombies.iter().filter(|z| z.state != Z_DEAD && z.pos.dist(e.pos) < 3.2).map(|z| (z.id, z.max_hp)).collect();
                     for (id, hp) in ids {
@@ -1076,6 +1132,11 @@ impl Game {
                     E_FRAG | E_IMPACT if boom => {
                         let zd = 400.0 + 90.0 * self.sv.round as f32;
                         self.explode(e.pos, if e.kind == E_FRAG { 6.0 } else { 4.5 }, zd, 180.0, e.owner);
+                    }
+                    E_ROCKET if boom => {
+                        // Splash keeps pace with zombie health so the launcher stays useful late.
+                        let zd = e.a * (1.0 + 0.1 * self.sv.round as f32);
+                        self.explode_by(e.pos, ROCKET_RADIUS, zd, 260.0, e.owner, W_COMET);
                     }
                     E_STUN => {
                         self.ev(EV_EXPLODE, &[e.pos.x, e.pos.y, e.pos.z, 6.0, 1.0]);
@@ -1181,7 +1242,7 @@ impl Game {
             ZRec { id: z.id, pos: z.pos, yaw: z.yaw, state: z.state, hp: (z.hp / z.max_hp).clamp(0.0, 1.0), kind: z.kind }.put(o);
         }
         for e in &self.ents {
-            ERec { kind: e.kind, pos: e.pos, a: e.t }.put(o);
+            ERec { kind: e.kind, pos: e.pos, a: if e.kind == E_ROCKET { pack_dir(e.vel) } else { e.t } }.put(o);
         }
         for b in &self.map.barrs {
             o.push(b.boards as f32);
@@ -1271,6 +1332,98 @@ mod tests {
         assert_eq!(g.sv.zombies.iter().find(|x| x.id == z).unwrap().state, Z_DEAD);
         assert_eq!(g.slots[0].p.points, 510 + 10 + 10 + 100, "headshot kill pays 100");
         assert_eq!(g.slots[0].p.headshots, 1);
+    }
+
+    /// Arms player `i` with `id` in hand, ready to fire.
+    fn hold(g: &mut Game, i: usize, id: i32) {
+        g.slots[i].p.arms.equip(0, Gun::new(id, 0));
+        g.slots[i].p.arms.switch_t = 0.0;
+    }
+    fn deaths(g: &Game) -> Vec<(f32, f32, f32)> {
+        g.events.chunks(EV_STRIDE).filter(|e| e[0] == EV_PDEATH as f32).map(|e| (e[1], e[2], e[3])).collect()
+    }
+
+    #[test]
+    fn rockets_fly_then_explode_on_contact() {
+        let mut g = Game::new(1, MODE_SURVIVAL, 1, true);
+        g.local = 0;
+        g.add_player(0, 0, default_loadout());
+        g.phase = PH_ACTIVE;
+        g.sv.round = 1;
+        g.timer = 99.0;
+        hold(&mut g, 0, W_COMET);
+        let eye = g.slots[0].p.ctl.eye_pos();
+        let zp = g.slots[0].p.ctl.pos + v3(4.0, 0.0, 0.0);
+        let z = zombie(&mut g, zp);
+        let (yaw, pitch) = aim(eye, zp + v3(0.0, 1.0, 0.0));
+        g.cmd(0, &cmd(1, yaw, pitch, B_FIRE, 0.0));
+        assert_eq!(g.slots[0].p.arms.gun().ammo, 0.0, "one rocket per load");
+        let rocket = |g: &Game| g.ents.iter().find(|e| e.kind == E_ROCKET).map(|e| e.pos);
+        let start = rocket(&g).expect("a rocket is in flight");
+        assert!(g.sv.zombies[0].hp == 150.0, "nothing is hit at the moment of firing");
+        g.step(1.0 / 60.0);
+        let moved = rocket(&g).expect("still flying after one tick");
+        assert!((moved.dist(start) - ROCKET_SPEED / 60.0).abs() < 0.01, "flies at a steady speed");
+        for _ in 0..20 {
+            g.step(1.0 / 60.0);
+        }
+        assert!(rocket(&g).is_none(), "it hit something");
+        assert!(g.sv.zombies.iter().find(|x| x.id == z).map_or(true, |x| x.state == Z_DEAD), "the zombie is dead");
+        assert_eq!(g.slots[0].p.kills, 1);
+        assert!(g.events.chunks(EV_STRIDE).any(|e| e[0] == EV_EXPLODE as f32 && v3(e[1], e[2], e[3]).dist(zp) < 1.5), "exploded at the zombie");
+
+        // A rocket fired into the sky runs out of fuel and bursts in the air.
+        let mut g = Game::new(1, MODE_SURVIVAL, 1, true);
+        g.local = 0;
+        g.add_player(0, 0, default_loadout());
+        g.phase = PH_ACTIVE;
+        hold(&mut g, 0, W_COMET);
+        g.cmd(0, &cmd(1, 0.0, 1.5, B_FIRE, 0.0));
+        for _ in 0..200 {
+            g.step(1.0 / 60.0);
+        }
+        assert!(rocket(&g).is_none());
+    }
+
+    #[test]
+    fn rocket_kills_are_credited_to_the_launcher() {
+        let mut g = Game::new(1, MODE_SKIRMISH, 1, true);
+        g.local = 0;
+        g.add_player(0, 0, default_loadout());
+        g.add_player(1, 1, default_loadout());
+        g.phase = PH_ACTIVE;
+        g.timer = 100.0;
+        hold(&mut g, 0, W_COMET);
+        let (me, eye) = (g.slots[0].p.ctl.pos, g.slots[0].p.ctl.eye_pos());
+        // A direction with open ground in front of the shooter.
+        let dir = (0..32)
+            .map(|k| look_dir(k as f32 * core::f32::consts::TAU / 32.0, 0.0))
+            .find(|d| g.map.world.raycast(eye, *d, 12.0).is_none() && g.map.world.raycast(me + v3(0.0, 0.3, 0.0), *d, 12.0).is_none())
+            .expect("open ground near the spawn");
+        g.slots[1].p.ctl.pos = me + dir * 8.0;
+        g.slots[1].p.ctl.vel = V3::ZERO;
+        g.slots[1].p.invuln_t = 0.0;
+        g.slots[0].p.invuln_t = 0.0;
+        let (yaw, pitch) = aim(eye, me + dir * 8.0 + v3(0.0, 1.0, 0.0));
+        g.cmd(0, &cmd(1, yaw, pitch, B_FIRE, 0.0));
+        for _ in 0..30 {
+            g.step(1.0 / 60.0);
+        }
+        assert_eq!(g.slots[1].p.life, DEAD, "a direct hit kills");
+        assert_eq!(deaths(&g), vec![(g.slots[1].p.id as f32, g.slots[0].p.id as f32, W_COMET as f32)]);
+        assert_eq!(g.slots[0].p.life, ALIVE, "the shooter is outside the blast");
+    }
+
+    #[test]
+    fn packed_directions_round_trip() {
+        for (yaw, pitch) in [(0.0, 0.0), (1.2, -0.4), (-2.9, 1.1), (3.1, -1.5)] {
+            let a = pack_dir(look_dir(yaw, pitch));
+            assert_eq!(a, a.round(), "an exact integer");
+            let (yq, pq) = ((a / 512.0).floor(), a % 512.0);
+            let (y2, p2) = (yq / 511.0 * core::f32::consts::TAU - core::f32::consts::PI, pq / 511.0 * core::f32::consts::PI - core::f32::consts::FRAC_PI_2);
+            let back = look_dir(y2, p2);
+            assert!(back.dot(look_dir(yaw, pitch)) > 0.9995, "({yaw}, {pitch}) came back as ({y2}, {p2})");
+        }
     }
 
     #[test]

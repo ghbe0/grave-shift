@@ -41,7 +41,11 @@ export class Hud {
       case V.hit: if (e[1] === me) { this.hitUntil = performance.now() + 120; this.hitKill = e[4] > 0; } break;
       case V.round: this.announce(e[2] ? `Round ${e[1]} survived` : s.start.mode === 0 ? `Round ${e[1]}` : 'Fight!'); break;
       case V.pdown: this.say(e[1] === me ? 'You are down' : `${this.name(e[1])} is down`); break;
-      case V.pdeath: this.say(e[2] >= 0 ? `${this.name(e[2])} eliminated ${this.name(e[1])}` : e[1] === me ? 'You bled out' : `${this.name(e[1])} bled out`); break;
+      case V.pdeath: {
+        const how = e[3] >= 0 ? cat.weapons[e[3]]?.name : e[3] === -1 ? 'Knife' : e[3] === -2 ? 'Explosive' : '';
+        this.say(e[2] >= 0 ? `${this.name(e[2])} eliminated ${this.name(e[1])}${how ? ` · ${how}` : ''}` : e[1] === me ? 'You bled out' : `${this.name(e[1])} bled out`);
+        break;
+      }
       case V.revive: this.say(e[1] === me ? 'You are back up' : `${this.name(e[1])} is back up`); break;
       case V.door: this.say(`Opened ${cat.maps[s.start.map].doors[e[1]] ?? 'a door'}`); break;
       case V.power: this.announce('Power restored'); break;
@@ -106,7 +110,7 @@ export class Hud {
     const g = (f: string) => p[P[`arms.guns${cur}.${f}`]];
     const w = cat.weapons[g('id')];
     const mod = g('modi') > 0 ? ` · ${cat.mods[g('modi')]}` : '';
-    $('weapon').textContent = w ? `${w.name}${g('tier') ? ' Mk II' : ''}${mod}` : '';
+    $('weapon').textContent = w ? `${w.name}${g('tier') ? ' Mk II' : ''}${w.burst > 1 ? ' · Burst' : ''}${mod}` : '';
     $('ammo').textContent = w ? `${g('ammo')}` : '';
     $('reserve').textContent = w ? `/ ${Math.floor(g('reserve'))}` : '';
     $('ammo').classList.toggle('low', !!w && g('ammo') <= Math.max(1, w.mag * 0.25));

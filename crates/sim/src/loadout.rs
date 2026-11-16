@@ -66,8 +66,9 @@ pub fn from_floats(d: &[f32]) -> Loadout {
 fn dupes(s: &[i32]) -> bool {
     s.iter().enumerate().any(|(i, a)| *a >= 0 && s[..i].contains(a))
 }
+/// Primary-slot weapons: everything but pistols, launchers (secondaries) and special weapons.
 fn is_primary(class: u8) -> bool {
-    class != C_PISTOL && class != C_SPECIAL
+    class != C_PISTOL && class != C_SPECIAL && class != C_LAUNCHER
 }
 
 /// Checks every rule and returns the points spent.
@@ -211,6 +212,11 @@ mod tests {
         l[L_PRIMARY] = 5;
         l[L_PATT] = 1; // scope on a shotgun
         assert_eq!(validate(&l), Err(Invalid::Incompatible));
+        let mut l = default_loadout();
+        l[L_SECONDARY] = W_COMET; // launchers are secondaries
+        assert_eq!(validate(&l), Ok(9));
+        l[L_PRIMARY] = W_COMET;
+        assert_eq!(validate(&l), Err(Invalid::WrongSlot));
         let mut l = default_loadout();
         l[L_PERK] = 4; // tier 2 perk in a tier 1 slot
         assert_eq!(validate(&l), Err(Invalid::WrongSlot));

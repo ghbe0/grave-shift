@@ -1,7 +1,7 @@
 // Turns match state into a renderer `Frame`: the textured level with trim and lamps,
 // interactables, jointed animated characters, the first-person weapon and arms, tracers, muzzle
 // flashes and lights, plus camera and post-processing settings.
-import type { Sim } from '../core/sim';
+import { WF, type Sim } from '../core/sim';
 import { loadModel, type Model } from '../gfx/loader';
 import { compose, invert, lookAt, mat4, mul, ortho, perspective, transformPoint } from '../gfx/mat';
 import { cubeMesh, cylinderMesh, FLAG_NOSHADOW, FLAG_VIEWMODEL, INSTANCE_FLOATS, LIGHT_FLOATS, MAT, MAX_LIGHTS, sphereMesh, type Draw, type Frame, type Renderer } from '../gfx/renderer';
@@ -90,7 +90,12 @@ class Batch {
 }
 
 interface Tracer { a: number[]; b: number[]; t: number; color: RGB }
-interface Flash { pos: number[]; t: number; life: number; color: RGB; radius: number; size: number }
+/**
+ * A short-lived effect box. `radius` > 0 also lights the world. `glow` overrides the brightness
+ * (above 1 draws it unlit and glowing, otherwise lit like smoke); `vel` moves it (debris) and
+ * `rise` lifts it over its life (fire and smoke).
+ */
+interface Flash { pos: number[]; t: number; life: number; color: RGB; radius: number; size: number; glow?: number; vel?: number[]; rise?: number }
 interface LightSrc { pos: number[]; radius: number; color: RGB; intensity: number; flicker?: number }
 
 export interface SceneSettings { fov: number; motionBlur: boolean; dof: boolean }
@@ -119,6 +124,10 @@ export class Scene {
   private models = new Map<string, Model | null>();
   private tracers: Tracer[] = [];
   private flashes: Flash[] = [];
+  /** Weapons the mystery crate cycles through while it rolls. */
+  private crateWeapons: number[] = [];
+  /** Time of the last rocket smoke puff (puffs are spaced in time, whatever the frame rate). */
+  private smokeAt = 0;
   private prevViewProj = mat4();
   private frameData = new Batch();
   private lights = new Float32Array(MAX_LIGHTS * LIGHT_FLOATS);
@@ -154,6 +163,8 @@ export class Scene {
     // A barricade's boards span whichever way its opening is walled in.
     this.barrAxis = session.mapInfo.barricades.map(p => this.wallAt(p[0] - 2, p[2]) && this.wallAt(p[0] + 2, p[2]));
     for (const w of sim.catalog.weapons) this.load(`weapons/${w.slug}`);
+    this.load('props/rocket');
+    this.crateWeapons = sim.catalog.weapons.filter(w => w.flags & WF.crate).map(w => w.id);
     for (const p of sim.catalog.maps[session.start.map].props) this.load(`props/${p}`);
   }
 
@@ -224,7 +235,12 @@ export class Scene {
   handleEvent(e: Float32Array, view: View): void {
     const { V } = this.sim.L;
     const s = this.session;
-    if (e[0] === V.local && e[1] === 1) {
+    const rocket = (w: number) => ((this.sim.catalog.weapons[w]?.flags ?? 0) & WF.rocket) !== 0;
+    if (e[0] === V.local && e[1] === 1 && rocket(e[2])) {
+      // A rocket launch: no tracer, the projectile itself comes back in the snapshots.
+      this.kick = 2.2;
+      this.muzzle = 0.08;
+    } else if (e[0] === V.local && e[1] === 1) {
       // Our own shot: draw the tracer immediately from a local trace instead of waiting for the host.
       const dir = [-Math.sin(view.yaw) * Math.cos(view.pitch), Math.sin(view.pitch), -Math.cos(view.yaw) * Math.cos(view.pitch)];
       const dist = s.game.raycast(view.pos, dir, 120);
@@ -238,11 +254,13 @@ export class Scene {
     } else if (e[0] === V.shot && e[1] !== s.selfId) {
       const shooter = s.players().find(p => p.id === e[1]);
       const from = shooter ? [shooter.x - Math.sin(shooter.yaw) * 0.6, shooter.y + 1.35, shooter.z - Math.cos(shooter.yaw) * 0.6] : [e[3], e[4] + 4, e[5]];
-      this.tracers.push({ a: from, b: [e[3], e[4], e[5]], t: 0.06, color: this.tracerColor(e[2]) });
+      if (!rocket(e[2])) this.tracers.push({ a: from, b: [e[3], e[4], e[5]], t: 0.06, color: this.tracerColor(e[2]) });
       if (shooter) this.flashes.push({ pos: from, t: 0.05, life: 0.05, color: [1, 0.8, 0.4], radius: 7, size: 0.16 });
+    } else if (e[0] === V.explode && e[5] === 0) {
+      this.blast([e[1], e[2] + 0.4, e[3]], e[4]);
     } else if (e[0] === V.explode) {
       const stun = e[5] === 1;
-      this.flashes.push({ pos: [e[1], e[2] + 0.5, e[3]], t: 0.35, life: 0.35, color: stun ? [0.5, 0.7, 1] : e[5] === 2 ? [1, 0.2, 0.2] : [1, 0.6, 0.2], radius: e[4] * 2.5, size: e[4] * 0.5 });
+      this.flashes.push({ pos: [e[1], e[2] + 0.5, e[3]], t: 0.35, life: 0.35, color: stun ? [0.5, 0.7, 1] : [1, 0.2, 0.2], radius: e[4] * 2.5, size: e[4] * 0.5 });
     } else if (e[0] === V.zdeath) {
       this.flashes.push({ pos: [e[2], e[3] + 1, e[4]], t: 0.18, life: 0.18, color: [0.5, 0.04, 0.03], radius: 0, size: 0.6 });
     } else if (e[0] === V.powerup && e[5] === 1) {
@@ -251,6 +269,24 @@ export class Scene {
       this.hurt = 1;
     } else if (e[0] === V.hit) {
       this.flashes.push({ pos: [e[5], e[6], e[7]], t: 0.12, life: 0.12, color: [0.45, 0.03, 0.02], radius: 0, size: 0.22 });
+    }
+  }
+  /** An explosion: a bright core that lights the area, fire, flying sparks and lingering smoke. */
+  private blast(at: number[], r: number): void {
+    const rnd = (k: number) => (Math.random() * 2 - 1) * k;
+    this.flashes.push({ pos: at, t: 0.3, life: 0.3, color: [1, 0.72, 0.4], radius: r * 2.5, size: r * 0.22, glow: 5 });
+    for (let i = 0; i < 8; i++) {
+      const life = 0.4 + Math.random() * 0.25;
+      this.flashes.push({ pos: [at[0] + rnd(r * 0.28), at[1] + Math.random() * r * 0.25, at[2] + rnd(r * 0.28)], t: life, life, color: [1, 0.36 + Math.random() * 0.2, 0.06], radius: 0, size: r * (0.11 + Math.random() * 0.07), glow: 2.6, rise: 0.8 });
+    }
+    for (let i = 0; i < 7; i++) {
+      const life = 1.3 + Math.random() * 0.6;
+      const g = 0.1 + Math.random() * 0.06;
+      this.flashes.push({ pos: [at[0] + rnd(r * 0.3), at[1] + Math.random() * r * 0.2, at[2] + rnd(r * 0.3)], t: life, life, color: [g, g, g * 1.05], radius: 0, size: r * (0.16 + Math.random() * 0.08), glow: 0, rise: 1.6 });
+    }
+    for (let i = 0; i < 10; i++) {
+      const life = 0.35 + Math.random() * 0.3;
+      this.flashes.push({ pos: at.slice(), t: life, life, color: [1, 0.8, 0.45], radius: 0, size: 0.05, glow: 6, vel: [rnd(9), 3 + Math.random() * 7, rnd(9)] });
     }
   }
   private tracerColor(weapon: number): RGB {
@@ -467,7 +503,8 @@ export class Scene {
         // A beam of light marks where the crate is.
         glows.box(x, 12, z, 0.25, 22, 0.25, [0.35, 0.6, 1], -1, state === 3 ? 0 : 0.8, FLAG_NOSHADOW);
         lights.push({ pos: [x, 1.6, z], radius: 6, color: [0.35, 0.6, 1], intensity: 5 });
-        const shown = state === 2 ? hdr[H.crate_weapon] : state === 1 ? Math.floor(t * 9) % 8 : -1;
+        const cycle = this.crateWeapons;
+        const shown = state === 2 ? hdr[H.crate_weapon] : state === 1 && cycle.length ? cycle[Math.floor(t * 9) % cycle.length] : -1;
         if (shown >= 0) {
           compose(tmp, 0, x, 1.5 + Math.sin(t * 3) * 0.05, z, 1.8, 1.8, 1.8, Math.PI / 2, 0, 0);
           this.drawModel(groups, `weapons/${sim.catalog.weapons[shown]?.slug}`, tmp.slice(), 0, true);
@@ -518,6 +555,8 @@ export class Scene {
     for (const p of s.players()) if (p.rec[P.life] !== 2) this.survivor(round, glows, groups, p, t);
 
     // Power-ups, grenades and lingering effects.
+    const puff = t - this.smokeAt >= 0.025 || t < this.smokeAt;
+    if (puff) this.smokeAt = t;
     for (const e of s.snap?.ents ?? []) {
       const kind = e[E.kind], x = e[E.pos], y = e[E.pos + 1], z = e[E.pos + 2];
       if (kind >= 10 && kind < 15) {
@@ -531,6 +570,16 @@ export class Scene {
         const c: RGB = kind === 20 ? [1, 0.45, 0.1] : [0.6, 0.8, 1];
         for (let i = 0; i < 6; i++) glows.box(x + Math.cos(t * 3 + i) * 1.4, y + 0.3 + ((t * 2 + i * 0.4) % 1.5), z + Math.sin(t * 3 + i) * 1.4, 0.18, 0.18, 0.18, c, -1, 4, FLAG_NOSHADOW, t + i);
         lights.push({ pos: [x, y + 1, z], radius: 8, color: c, intensity: 7 });
+      } else if (kind === 4) {
+        // Rocket: the model along its flight direction, a hot exhaust and a smoke trail.
+        const a = e[E.a], yq = Math.floor(a / 512), pq = a - yq * 512;
+        const yaw = (yq / 511) * Math.PI * 2 - Math.PI, pitch = (pq / 511) * Math.PI - Math.PI / 2;
+        compose(tmp, 0, x, y, z, 1.6, 1.6, 1.6, yaw, pitch, t * 12);
+        this.drawModel(groups, 'props/rocket', tmp.slice(), 0, true);
+        const back = [Math.sin(yaw) * Math.cos(pitch), -Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)];
+        glows.box(x + back[0] * 0.3, y + back[1] * 0.3, z + back[2] * 0.3, 0.09, 0.09, 0.09, [1, 0.6, 0.2], -1, 12, FLAG_NOSHADOW, t * 40, t * 30);
+        lights.push({ pos: [x + back[0] * 0.4, y + back[1] * 0.4, z + back[2] * 0.4], radius: 7, color: [1, 0.55, 0.2], intensity: 12 });
+        if (puff) this.flashes.push({ pos: [x + back[0] * 0.45, y + back[1] * 0.45, z + back[2] * 0.45], t: 0.6, life: 0.6, color: [0.16, 0.16, 0.17], radius: 0, size: 0.2 });
       } else if (kind === 30) {
         glows.box(x, 0.05, z, 1.2, 0.05, 1.2, [1, 0.2, 0.1], -1, 3 + Math.sin(t * 20) * 2, FLAG_NOSHADOW, t * 3);
       }
@@ -546,8 +595,14 @@ export class Scene {
     this.tracers = this.tracers.filter(tr => tr.t > 0);
     for (const f of this.flashes) {
       const k = f.t / f.life;
-      const size = f.size * (1.6 - k);
-      (f.radius ? glows : round).box(f.pos[0], f.pos[1], f.pos[2], size, size, size, f.color, -1, f.radius ? 6 * k : 0.6 * k, FLAG_NOSHADOW, t * 5, t * 3);
+      const size = f.vel ? f.size : f.size * (1.6 - k);
+      const glow = f.glow ?? (f.radius ? 6 : 0.6);
+      if (f.vel) {
+        f.vel[1] -= 12 * dt;
+        f.pos[0] += f.vel[0] * dt; f.pos[1] += f.vel[1] * dt; f.pos[2] += f.vel[2] * dt;
+      }
+      const y = f.pos[1] + (f.rise ?? 0) * (1 - k);
+      (glow > 1 ? glows : round).box(f.pos[0], y, f.pos[2], size, size, size, f.color, -1, glow * k, FLAG_NOSHADOW, t * 5 + f.life * 9, t * 3 + f.life * 7);
       if (f.radius) lights.push({ pos: f.pos, radius: f.radius, color: f.color, intensity: 25 * k });
       f.t -= dt;
     }

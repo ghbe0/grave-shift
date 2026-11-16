@@ -7,6 +7,8 @@ pub const C_SHOTGUN: u8 = 3;
 pub const C_LMG: u8 = 4;
 pub const C_SNIPER: u8 = 5;
 pub const C_SPECIAL: u8 = 6;
+/// Launchers: secondary slot only, fire a rocket instead of bullets.
+pub const C_LAUNCHER: u8 = 7;
 
 /// Can come out of the mystery crate.
 pub const WF_CRATE: u32 = 1;
@@ -16,6 +18,8 @@ pub const WF_WONDER: u32 = 2;
 pub const WF_ABILITY: u32 = 4;
 /// Hits arc to nearby enemies.
 pub const WF_CHAIN: u32 = 8;
+/// Fires an explosive rocket (a projectile) instead of a hitscan bullet.
+pub const WF_ROCKET: u32 = 16;
 
 pub struct WeaponDef {
     pub name: &'static str,
@@ -43,15 +47,17 @@ pub struct WeaponDef {
     pub cost: u32,
     pub pierce: u32,
     pub flags: u32,
+    /// Shots per trigger pull for burst weapons (0: not a burst weapon).
+    pub burst: u32,
 }
 
 macro_rules! w {
     ($name:expr, $slug:expr, $class:expr, dmg $dmg:expr, $head:expr; rpm $rpm:expr, $auto:expr; mag $mag:expr, $res:expr, $reload:expr;
      spread $hip:expr, $ads:expr, $pel:expr; range $r0:expr, $r1:expr, $rmin:expr; ads $adst:expr, $zoom:expr, $mob:expr;
-     kick $kv:expr, $kh:expr; cost $cost:expr; pierce $pierce:expr; flags $flags:expr) => {
+     kick $kv:expr, $kh:expr; cost $cost:expr; pierce $pierce:expr; flags $flags:expr $(; burst $burst:expr)?) => {
         WeaponDef { name: $name, slug: $slug, class: $class, dmg: $dmg, head: $head, rpm: $rpm, auto: $auto, mag: $mag, reserve: $res,
             reload: $reload, hip: $hip, ads: $ads, pellets: $pel, r0: $r0, r1: $r1, rmin: $rmin, ads_t: $adst, zoom: $zoom, mobility: $mob,
-            kick_v: $kv, kick_h: $kh, cost: $cost, pierce: $pierce, flags: $flags }
+            kick_v: $kv, kick_h: $kh, cost: $cost, pierce: $pierce, flags: $flags, burst: 0 $(+ $burst)? }
     };
 }
 
@@ -60,7 +66,7 @@ pub const W_ARC: i32 = 8;
 pub const W_STORMLANCE: i32 = 9;
 pub const W_VERDICT: i32 = 10;
 
-pub static WEAPONS: [WeaponDef; 11] = [
+pub static WEAPONS: [WeaponDef; 23] = [
     w!("P-9 Sidearm", "p9", C_PISTOL, dmg 40.0, 2.0; rpm 450.0, false; mag 12.0, 96.0, 1.4; spread 0.012, 0.002, 1; range 15.0, 35.0, 0.6; ads 0.15, 1.15, 1.0; kick 0.012, 0.004; cost 0; pierce 0; flags 0),
     w!("Hornet MP", "hornet", C_PISTOL, dmg 30.0, 1.8; rpm 900.0, true; mag 20.0, 160.0, 1.6; spread 0.03, 0.008, 1; range 10.0, 25.0, 0.55; ads 0.15, 1.15, 1.0; kick 0.008, 0.006; cost 750; pierce 0; flags WF_CRATE),
     w!("Vespa SMG", "vespa", C_SMG, dmg 34.0, 1.8; rpm 800.0, true; mag 32.0, 192.0, 1.9; spread 0.028, 0.006, 1; range 10.0, 28.0, 0.55; ads 0.18, 1.2, 1.0; kick 0.007, 0.005; cost 1000; pierce 0; flags WF_CRATE),
@@ -72,7 +78,22 @@ pub static WEAPONS: [WeaponDef; 11] = [
     w!("Arc Caster", "arc", C_SPECIAL, dmg 1200.0, 1.0; rpm 180.0, false; mag 8.0, 48.0, 2.6; spread 0.01, 0.002, 1; range 60.0, 90.0, 0.8; ads 0.25, 1.3, 0.95; kick 0.02, 0.004; cost 0; pierce 5; flags WF_CRATE | WF_WONDER | WF_CHAIN),
     w!("Stormlance", "stormlance", C_SPECIAL, dmg 250.0, 1.0; rpm 300.0, true; mag 20.0, 0.0, 9.0; spread 0.02, 0.01, 1; range 30.0, 50.0, 0.7; ads 0.2, 1.15, 1.0; kick 0.006, 0.004; cost 0; pierce 0; flags WF_ABILITY | WF_CHAIN),
     w!("Verdict", "verdict", C_SPECIAL, dmg 5000.0, 1.0; rpm 150.0, false; mag 6.0, 0.0, 9.0; spread 0.004, 0.0, 1; range 80.0, 120.0, 0.9; ads 0.15, 1.2, 1.0; kick 0.05, 0.006; cost 0; pierce 2; flags WF_ABILITY),
+    w!("Talon Burst", "talon", C_AR, dmg 46.0, 2.0; rpm 900.0, false; mag 30.0, 210.0, 2.3; spread 0.034, 0.002, 1; range 30.0, 60.0, 0.72; ads 0.26, 1.3, 0.95; kick 0.008, 0.003; cost 1300; pierce 0; flags WF_CRATE; burst 3),
+    w!("Mako Bullpup", "mako", C_AR, dmg 36.0, 2.0; rpm 780.0, true; mag 32.0, 224.0, 2.0; spread 0.03, 0.004, 1; range 20.0, 45.0, 0.68; ads 0.22, 1.25, 0.97; kick 0.008, 0.006; cost 1500; pierce 0; flags WF_CRATE),
+    w!("Wasp PDW", "wasp", C_SMG, dmg 24.0, 1.6; rpm 1050.0, true; mag 40.0, 240.0, 2.0; spread 0.032, 0.009, 1; range 8.0, 22.0, 0.5; ads 0.16, 1.15, 1.02; kick 0.006, 0.006; cost 1100; pierce 0; flags WF_CRATE),
+    w!("Bastion SMG", "bastion", C_SMG, dmg 44.0, 1.8; rpm 600.0, true; mag 25.0, 175.0, 2.1; spread 0.03, 0.007, 1; range 12.0, 30.0, 0.6; ads 0.2, 1.2, 0.99; kick 0.01, 0.004; cost 1200; pierce 0; flags WF_CRATE),
+    w!("Reaper Auto", "reaper", C_SHOTGUN, dmg 15.0, 1.4; rpm 260.0, true; mag 8.0, 48.0, 3.0; spread 0.085, 0.07, 8; range 5.0, 13.0, 0.25; ads 0.22, 1.1, 0.93; kick 0.03, 0.01; cost 2000; pierce 0; flags WF_CRATE),
+    w!("Twinfang", "twinfang", C_SHOTGUN, dmg 30.0, 1.5; rpm 200.0, false; mag 2.0, 32.0, 2.4; spread 0.09, 0.075, 10; range 5.0, 12.0, 0.2; ads 0.2, 1.1, 0.96; kick 0.07, 0.015; cost 1200; pierce 0; flags WF_CRATE),
+    w!("Torrent LMG", "torrent", C_LMG, dmg 36.0, 2.0; rpm 800.0, true; mag 100.0, 400.0, 5.0; spread 0.05, 0.005, 1; range 25.0, 55.0, 0.7; ads 0.42, 1.3, 0.84; kick 0.007, 0.007; cost 2800; pierce 1; flags WF_CRATE),
+    w!("Hawkeye DMR", "hawkeye", C_SNIPER, dmg 110.0, 2.2; rpm 300.0, false; mag 15.0, 105.0, 2.5; spread 0.06, 0.0015, 1; range 50.0, 90.0, 0.8; ads 0.3, 2.6, 0.92; kick 0.025, 0.005; cost 2200; pierce 1; flags WF_CRATE),
+    w!("Monolith .50", "monolith", C_SNIPER, dmg 700.0, 2.5; rpm 40.0, false; mag 4.0, 28.0, 3.6; spread 0.1, 0.0, 1; range 100.0, 150.0, 0.85; ads 0.42, 5.0, 0.86; kick 0.08, 0.012; cost 0; pierce 3; flags WF_CRATE),
+    w!("Mamba Revolver", "mamba", C_PISTOL, dmg 110.0, 2.0; rpm 180.0, false; mag 6.0, 48.0, 2.4; spread 0.02, 0.002, 1; range 20.0, 40.0, 0.65; ads 0.16, 1.15, 1.0; kick 0.04, 0.008; cost 900; pierce 0; flags WF_CRATE),
+    w!("Rattler Burst", "rattler", C_PISTOL, dmg 34.0, 1.8; rpm 1100.0, false; mag 18.0, 126.0, 1.6; spread 0.015, 0.003, 1; range 14.0, 32.0, 0.6; ads 0.15, 1.15, 1.0; kick 0.01, 0.004; cost 800; pierce 0; flags WF_CRATE; burst 3),
+    w!("Comet Launcher", "comet", C_LAUNCHER, dmg 1500.0, 1.0; rpm 50.0, false; mag 1.0, 6.0, 3.2; spread 0.01, 0.002, 1; range 100.0, 150.0, 1.0; ads 0.4, 1.4, 0.85; kick 0.05, 0.01; cost 0; pierce 0; flags WF_CRATE | WF_ROCKET),
 ];
+pub const W_TALON: i32 = 11;
+pub const W_RATTLER: i32 = 21;
+pub const W_COMET: i32 = 22;
 
 pub fn weapon(id: i32) -> Option<&'static WeaponDef> {
     WEAPONS.get(usize::try_from(id).ok()?)

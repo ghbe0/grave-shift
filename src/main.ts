@@ -1,7 +1,7 @@
 // App entry: menus, party flow, and the frame loop.
 import { Sfx } from './audio/sfx';
 import { loadSim } from './core/load';
-import type { Sim } from './core/sim';
+import { WF, type Sim } from './core/sim';
 import { Input } from './engine/input';
 import { Ticker } from './engine/ticker';
 import { isTouchDevice, TouchControls } from './engine/touch';
@@ -521,7 +521,11 @@ class App {
     switch (e[0]) {
       case V.local:
         switch (e[1]) {
-          case 1: (this.sim.catalog.weapons[e[2]]?.flags ?? 0) & 8 ? this.sfx.energy() : this.sfx.shot(heavy(e[2])); break;
+          case 1: {
+            const flags = this.sim.catalog.weapons[e[2]]?.flags ?? 0;
+            if (flags & WF.rocket) this.sfx.rocket(); else if (flags & WF.chain) this.sfx.energy(); else this.sfx.shot(heavy(e[2]));
+            break;
+          }
           case 2: this.sfx.dry(); break;
           case 3: this.sfx.reload(); break;
           case 6: case 11: this.sfx.jump(); break;
@@ -531,7 +535,10 @@ class App {
           case 12: this.sfx.jump(); break;
         }
         break;
-      case V.shot: if (e[1] !== s.selfId) this.sfx.shot(heavy(e[2]), true); break;
+      case V.shot:
+        if (e[1] === s.selfId) break;
+        if ((this.sim.catalog.weapons[e[2]]?.flags ?? 0) & WF.rocket) this.sfx.rocket(true); else this.sfx.shot(heavy(e[2]), true);
+        break;
       case V.hit: if (e[1] === s.selfId) this.sfx.hit(e[4] > 0); break;
       case V.explode: if (e[5] !== 2) this.sfx.explode(); break;
       case V.buy: if (e[1] === s.selfId) this.sfx.buy(); break;

@@ -29,8 +29,11 @@ state! {
         pub switch_t: f32,
         pub switch_d: f32,
         pub ads: f32,
+        /// Shots fired in a row (drives the recoil pattern).
         pub burst: f32,
         pub burst_t: f32,
+        /// Shots still to fire in the current trigger pull of a burst weapon.
+        pub queued: u8,
         pub sprint_out: f32,
         pub melee_t: f32,
         pub lethal: f32,
@@ -60,7 +63,12 @@ pub struct Stats {
     pub recoil: f32,
     pub pierce: u32,
     pub flags: u32,
+    /// Shots per trigger pull (0: one, or continuous for automatics).
+    pub burst: u32,
 }
+
+/// Pause after a burst before the trigger answers again, in seconds.
+pub const BURST_DELAY: f32 = 0.2;
 
 /// Player-wide combat modifiers (perks, abilities).
 #[derive(Clone, Copy, Debug)]
@@ -120,6 +128,7 @@ impl Gun {
             recoil: if has(A_GRIP) { 0.75 } else { 1.0 },
             pierce: d.pierce + has(A_HARD) as u32 + up as u32,
             flags: d.flags,
+            burst: d.burst,
         })
     }
 }
@@ -178,6 +187,7 @@ impl Arms {
         self.switch_d = 0.45 * c.swap;
         self.switch_t = self.switch_d;
         self.reload_t = 0.0;
+        self.queued = 0;
         true
     }
     /// Puts a weapon in hand immediately (purchases, ability weapons).
@@ -189,6 +199,7 @@ impl Arms {
         self.switch_t = 0.15;
         self.reload_t = 0.0;
         self.burst = 0.0;
+        self.queued = 0;
     }
 
     /// Advances one command. Returns `AE_*` bits; `AE_FIRE` means one shot left the barrel this tick.
@@ -204,6 +215,9 @@ impl Arms {
             self.burst = 0.0;
         }
         self.sprint_out = if sprinting { 0.18 } else { (self.sprint_out - dt).max(0.0) };
+        if blocked || sprinting {
+            self.queued = 0;
+        }
 
         // Slot 2 only ever holds an ability weapon, so the swap key cycles the first two.
         if self.switch_t <= 0.0 {
@@ -231,6 +245,7 @@ impl Arms {
         if pressed(B_MELEE) && self.melee_t <= 0.0 {
             self.melee_t = 0.6;
             self.reload_t = 0.0;
+            self.queued = 0;
             return ev | AE_MELEE;
         }
         if pressed(B_LETHAL) && self.lethal >= 1.0 && self.melee_t <= 0.0 {
@@ -257,9 +272,11 @@ impl Arms {
         let g = *self.gun();
         if g.reserve > 0.0 && g.ammo < s.mag && (pressed(B_RELOAD) || (g.ammo <= 0.0 && self.cooldown <= 0.0)) {
             self.reload_t = s.reload;
+            self.queued = 0;
             return ev | AE_RELOAD;
         }
-        let trigger = if s.auto { held(B_FIRE) } else { pressed(B_FIRE) };
+        // A burst weapon keeps firing the rest of its burst after the trigger is let go.
+        let trigger = self.queued > 0 || if s.auto { held(B_FIRE) } else { pressed(B_FIRE) };
         if trigger && self.cooldown <= 0.0 && self.melee_t <= 0.0 && self.sprint_out <= 0.0 {
             if g.ammo > 0.0 {
                 self.gun_mut().ammo -= 1.0;
@@ -267,6 +284,13 @@ impl Arms {
                 self.burst += 1.0;
                 self.burst_t = 0.0;
                 ev |= AE_FIRE;
+                if s.burst > 1 {
+                    self.queued = if self.queued > 0 { self.queued - 1 } else { (s.burst - 1).min(255) as u8 };
+                    if self.queued == 0 || g.ammo <= 1.0 {
+                        self.queued = 0;
+                        self.cooldown += BURST_DELAY;
+                    }
+                }
             } else if pressed(B_FIRE) {
                 ev |= AE_DRY;
             }
@@ -319,6 +343,53 @@ mod tests {
             prev = B_FIRE;
         }
         assert_eq!(shots, 1);
+    }
+
+    #[test]
+    fn burst_weapons_fire_their_burst_from_one_press() {
+        let (mut a, cm) = (arms(W_TALON), Combat::default());
+        let fire = |a: &mut Arms, ticks: usize, first: u32| {
+            let mut shots = vec![];
+            let mut prev = 0;
+            for t in 0..ticks {
+                let b = if t < 2 { first } else { 0 }; // a two-tick tap
+                if a.step(&cmd(b), prev, &cm, false, false) & AE_FIRE != 0 {
+                    shots.push(t);
+                }
+                prev = b;
+            }
+            shots
+        };
+        let shots = fire(&mut a, 30, B_FIRE);
+        assert_eq!(shots.len(), 3, "one tap, three rounds: {shots:?}");
+        assert!(shots[2] - shots[0] <= 9, "the burst is quick: {shots:?}");
+        assert_eq!(a.gun().ammo, 27.0);
+        // Pressing again during the post-burst pause does nothing; after it, another burst.
+        let mut a = arms(W_TALON);
+        let mut prev = 0;
+        let mut times = vec![];
+        for t in 0..60 {
+            let b = if t % 2 == 0 { B_FIRE } else { 0 }; // hammering the trigger
+            if a.step(&cmd(b), prev, &cm, false, false) & AE_FIRE != 0 {
+                times.push(t);
+            }
+            prev = b;
+        }
+        let gaps: Vec<usize> = times.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(gaps.iter().filter(|g| **g >= 12).count() >= 2, "bursts are separated by a pause: {times:?}");
+        assert_eq!(times.len() % 3, 0, "only whole bursts: {times:?}");
+        // Holding the trigger does not make it automatic.
+        let mut a = arms(W_TALON);
+        let mut n = 0;
+        for t in 0..60 {
+            n += (a.step(&cmd(B_FIRE), if t == 0 { 0 } else { B_FIRE }, &cm, false, false) & AE_FIRE != 0) as u32;
+        }
+        assert_eq!(n, 3);
+        // A burst stops at an empty magazine and a reload interrupts it.
+        let mut a = arms(W_TALON);
+        a.guns[0].ammo = 2.0;
+        assert_eq!(fire(&mut a, 30, B_FIRE).len(), 2);
+        assert_eq!(a.queued, 0);
     }
 
     #[test]
