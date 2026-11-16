@@ -34,6 +34,7 @@ export class Scenery {
   private cones = new Batch();
   private rocks = new Batch();
   private tufts = new Batch();
+  private glow = new Batch();
   private meshes: { cube: number; sphere: number; cylinder: number; lump: number; cone: number; rock: number; tuft: number };
   private rnd: () => number;
 
@@ -50,8 +51,209 @@ export class Scenery {
     // Below a quarter detail (the ?low test switch on software renderers) only the props that
     // have collision are drawn.
     if (site.detail >= 0.25) {
+      this.architecture();
+      this.backdrop();
+      this.markings();
       this.walls();
       this.ground();
+    }
+  }
+
+  /** What kind of building a wall cell belongs to: blocks of about 10 m share a style and height. */
+  private building(x: number, z: number): { style: number; extra: number; warm: boolean } {
+    const bx = Math.floor(x / 10), bz = Math.floor(z / 10);
+    let h = Math.imul(bx * 73856093 ^ bz * 19349663 ^ (this.site.seed + 7) * 83492791, 2654435761) >>> 0;
+    h ^= h >>> 15;
+    const r = (n: number) => ((h >>> n) & 255) / 255;
+    // 0 bare concrete, 1 brick, 2 corrugated steel.
+    return { style: r(0) < 0.3 ? 0 : r(0) < 0.72 ? 1 : 2, extra: r(8) < 0.25 ? 0 : 1.5 + Math.floor(r(16) * 4) * 1.4, warm: r(24) < 0.5 };
+  }
+
+  /**
+   * Turns the enclosing walls into buildings: brick and corrugated-steel facades with windows,
+   * doors and downpipes, and upper storeys with parapets, roof plant and chimneys at different
+   * heights, so the skyline is no longer one flat line of concrete.
+   */
+  private architecture(): void {
+    const s = this.site;
+    const H = 7;
+    const BRICK: RGB = [1.25, 1.0, 0.9], STEEL: RGB[] = [[0.55, 0.62, 0.66], [0.62, 0.5, 0.42], [0.45, 0.55, 0.5]];
+    // Upper storeys and roofs over every wall cell.
+    for (let x = 1; x < s.size[0]; x += 2) {
+      for (let z = 1; z < s.size[1]; z += 2) {
+        if (!s.wallAt(x, z)) continue;
+        const b = this.building(x, z);
+        if (b.extra <= 0) continue;
+        const tint: RGB = b.style === 1 ? BRICK : b.style === 2 ? STEEL[(Math.floor(x / 10) + Math.floor(z / 10)) % 3] : [0.95, 0.95, 0.95];
+        const layer = b.style === 1 ? MAT.brick : b.style === 2 ? MAT.painted : MAT.concrete;
+        this.cube.box(x, H + b.extra / 2, z, 2, b.extra, 2, tint, layer);
+        this.cube.box(x, H + b.extra + 0.12, z, 2.12, 0.24, 2.12, [0.7, 0.7, 0.7], MAT.concrete); // parapet
+        const roll = this.rnd();
+        if (roll < 0.06) {
+          // Roof plant: an air handler with a vent stack.
+          this.cube.box(x, H + b.extra + 0.75, z, 1.3, 1.0, 1.1, [0.75, 0.78, 0.8], MAT.painted, 0, 0, this.range(0, 0.4));
+          this.cylinder.box(x + 0.3, H + b.extra + 1.6, z, 0.3, 0.8, 0.3, [0.8, 0.8, 0.8], MAT.gunmetal);
+        } else if (roll < 0.1) {
+          this.cube.box(x, H + b.extra + 1.0, z, 0.7, 1.8, 0.7, b.style === 1 ? BRICK : [0.8, 0.8, 0.8], b.style === 1 ? MAT.brick : MAT.concrete); // chimney
+        } else if (roll < 0.13) {
+          // Water tank on legs.
+          this.cylinder.box(x, H + b.extra + 1.9, z, 1.5, 1.6, 1.5, [0.9, 0.9, 0.9], MAT.rust);
+          for (const [dx, dz] of [[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]]) this.cylinder.box(x + dx, H + b.extra + 0.6, z + dz, 0.08, 1.1, 0.08, [0.6, 0.6, 0.6], MAT.gunmetal);
+        } else if (roll < 0.16) {
+          this.cylinder.box(x, H + b.extra + 1.7, z, 0.05, 3, 0.05, [0.7, 0.7, 0.7], MAT.gunmetal); // aerial
+        }
+      }
+    }
+    // Facades on every wall face that looks onto open floor.
+    for (const w of this.wallSpots()) {
+      const b = this.building(w.x - w.nx, w.z - w.nz);
+      const yaw = w.nx !== 0 ? Math.PI / 2 : 0;
+      const at = (d: number, out: number): [number, number] => [w.x + w.nz * d + w.nx * out, w.z + w.nx * d + w.nz * out];
+      const panel = (d: number, y: number, out: number, wd: number, ht: number, th: number, c: ArrayLike<number>, layer: number, glow = 0, rough = 1, metal = 0) => {
+        const [px, pz] = at(d, out);
+        (glow > 0 ? this.glow : this.cube).box(px, y, pz, wd, ht, th, c, layer, glow, glow > 0 ? FLAG_NOSHADOW : 0, yaw, 0, 0, metal, rough);
+      };
+      if (b.style === 0) continue;
+      if (b.style === 1) {
+        panel(0, 3.9, 0.035, 2.0, 6.3, 0.07, BRICK, MAT.brick);
+        // Stone string course between the floors.
+        panel(0, 3.55, 0.07, 2.0, 0.16, 0.14, [0.85, 0.83, 0.8], MAT.concrete);
+      } else {
+        const tint = STEEL[(Math.floor((w.x - w.nx) / 10) + Math.floor((w.z - w.nz) / 10)) % 3];
+        panel(0, 3.9, 0.03, 2.0, 6.3, 0.06, tint, MAT.painted);
+        for (let k = -4; k <= 4; k++) panel(k * 0.22, 3.9, 0.07, 0.07, 6.3, 0.05, [tint[0] * 0.8, tint[1] * 0.8, tint[2] * 0.8], MAT.painted); // ribs
+      }
+      // One feature per face, chosen from its position so it never changes.
+      const pick = ((Math.floor(w.x) * 31 + Math.floor(w.z) * 17 + (w.nx + 1) * 5 + (w.nz + 1) * 3) >>> 0) % 10;
+      const frame: RGB = b.style === 1 ? [0.85, 0.85, 0.82] : [0.3, 0.32, 0.35];
+      const window = (y: number, lit: boolean) => {
+        panel(0, y, 0.09, 1.3, 1.5, 0.1, frame, MAT.painted);
+        const glass: RGB = lit ? (b.warm ? [1, 0.75, 0.42] : [0.6, 0.8, 1]) : [0.03, 0.04, 0.05];
+        panel(0, y, 0.15, 1.1, 1.3, 0.03, glass, -1, lit ? 1.6 : 0, 0.06);
+        panel(0, y, 0.17, 0.05, 1.3, 0.03, frame, MAT.painted); // mullion
+        panel(0, y, 0.17, 1.1, 0.05, 0.03, frame, MAT.painted); // transom
+        panel(0, y - 0.8, 0.14, 1.45, 0.08, 0.22, [0.8, 0.8, 0.78], MAT.concrete); // sill
+      };
+      if (pick < 4) {
+        window(5.1, ((pick * 7 + Math.floor(w.x + w.z)) % 5) === 0);
+        if (b.style === 1 && pick < 2) window(2.1, false);
+      } else if (pick === 4) {
+        // A steel door with a lamp bracket above it.
+        panel(0, 1.12, 0.09, 1.1, 2.2, 0.08, [0.35, 0.42, 0.4], MAT.painted);
+        panel(0, 2.3, 0.1, 1.3, 0.12, 0.14, frame, MAT.painted);
+        panel(0.38, 1.1, 0.14, 0.05, 0.16, 0.05, [0.8, 0.8, 0.8], MAT.gunmetal);
+      } else if (pick === 5) {
+        // Downpipe from the gutter.
+        const [px, pz] = at(0.7, 0.12);
+        this.cylinder.box(px, 3.6, pz, 0.12, 6.8, 0.12, [0.5, 0.52, 0.55], MAT.painted);
+        for (const y of [1.2, 3.4, 5.6]) panel(0.7, y, 0.1, 0.2, 0.06, 0.2, [0.4, 0.4, 0.4], MAT.gunmetal);
+      } else if (pick === 6 && b.style === 2) {
+        // Roller shutter.
+        panel(0, 1.6, 0.09, 1.9, 3.2, 0.08, [0.6, 0.62, 0.6], MAT.gunmetal);
+        for (let y = 0.2; y < 3.2; y += 0.25) panel(0, y, 0.14, 1.9, 0.04, 0.03, [0.4, 0.4, 0.4], MAT.gunmetal);
+      } else if (pick === 7) {
+        // Electrical cabinet with conduit.
+        panel(-0.3, 1.4, 0.14, 0.6, 0.9, 0.24, [0.55, 0.6, 0.58], MAT.painted);
+        const [px, pz] = at(-0.3, 0.1);
+        this.cylinder.box(px, 4.4, pz, 0.05, 5.1, 0.05, [0.7, 0.7, 0.7], MAT.gunmetal);
+      }
+    }
+  }
+
+  /** The world beyond the walls: neighbouring blocks, chimney stacks, a crane and a tree line. */
+  private backdrop(): void {
+    const s = this.site;
+    const r = rng(77 + s.seed * 19);
+    const range = (a: number, b: number) => a + (b - a) * r();
+    const cx = s.size[0] / 2, cz = s.size[1] / 2;
+    const reach = Math.max(s.size[0], s.size[1]) / 2;
+    const count = 26;
+    for (let k = 0; k < count; k++) {
+      const a = (k / count) * Math.PI * 2 + range(-0.08, 0.08);
+      const d = reach + range(14, 46);
+      const x = cx + Math.cos(a) * d * (s.size[0] / (reach * 2)) * 1.25, z = cz + Math.sin(a) * d * (s.size[1] / (reach * 2)) * 1.25;
+      if (x > -4 && x < s.size[0] + 4 && z > -4 && z < s.size[1] + 4) continue;
+      const kind = r();
+      if (kind < 0.55) {
+        // An office or tenement block with rows of windows, a few of them lit.
+        const w = range(8, 16), h = range(11, 30), dp = range(8, 14), yaw = range(0, 3.14);
+        const tone = range(0.5, 0.95);
+        this.cube.box(x, h / 2, z, w, h, dp, [tone, tone * 0.97, tone * 0.93], r() < 0.5 ? MAT.concrete : MAT.brick, 0, 0, yaw);
+        this.cube.box(x, h + 0.3, z, w + 0.4, 0.6, dp + 0.4, [0.6, 0.6, 0.6], MAT.concrete, 0, 0, yaw);
+        const warm = r() < 0.6;
+        for (let fy = 2.5; fy < h - 1.5; fy += 3.2) {
+          for (const side of [-1, 1]) {
+            for (let fx = -w / 2 + 1.4; fx < w / 2 - 1; fx += 2.4) {
+              if (r() > 0.22) continue;
+              const lx = fx, lz = side * (dp / 2 + 0.04);
+              const wx = x + lx * Math.cos(yaw) + lz * Math.sin(yaw), wz = z - lx * Math.sin(yaw) + lz * Math.cos(yaw);
+              this.glow.box(wx, fy, wz, 1.2, 1.5, 0.06, warm ? [1, 0.74, 0.4] : [0.6, 0.8, 1], -1, 1.3, FLAG_NOSHADOW, yaw);
+            }
+          }
+        }
+      } else if (kind < 0.7) {
+        // Chimney stack with warning bands.
+        const h = range(26, 40);
+        this.cylinder.box(x, h / 2, z, 3.2, h, 3.2, [1.1, 0.95, 0.85], MAT.brick);
+        for (const f of [0.78, 0.9]) this.cylinder.box(x, h * f, z, 3.3, 1.2, 3.3, [0.8, 0.2, 0.15], MAT.painted);
+        this.glow.box(x, h + 0.4, z, 0.4, 0.4, 0.4, [1, 0.15, 0.1], -1, 4, FLAG_NOSHADOW);
+      } else if (kind < 0.78) {
+        // Tower crane.
+        const h = range(30, 40), yaw = range(0, 6.28), jib = 24;
+        this.cube.box(x, h / 2, z, 1.2, h, 1.2, [0.95, 0.7, 0.1], MAT.painted);
+        this.cube.box(x + Math.sin(yaw) * jib * 0.3, h, z + Math.cos(yaw) * jib * 0.3, 0.9, 0.9, jib, [0.95, 0.7, 0.1], MAT.painted, 0, 0, yaw);
+        this.cube.box(x, h + 2, z, 0.6, 4, 0.6, [0.95, 0.7, 0.1], MAT.painted);
+        this.glow.box(x, h + 4.2, z, 0.35, 0.35, 0.35, [1, 0.15, 0.1], -1, 4, FLAG_NOSHADOW);
+      } else {
+        // A stand of trees.
+        for (let n = 0; n < 4; n++) {
+          const tx = x + range(-7, 7), tz = z + range(-7, 7), h = range(7, 12);
+          this.sphere.limb([tx, 0, tz], [tx, h * 0.6, tz], 0.3, BARK, MAT.bark);
+          const tint = LEAF_TINTS[n % LEAF_TINTS.length];
+          this.sphere.box(tx, h * 0.75, tz, h * 0.6, h * 0.55, h * 0.6, [tint[0] * 0.7, tint[1] * 0.7, tint[2] * 0.7], MAT.leaves, 0, 0, range(0, 6.28));
+          this.leaves.box(tx, h * 0.75, tz, h * 0.72, h * 0.66, h * 0.72, tint, MAT.leaves, 0, FLAG_FOLIAGE, range(0, 6.28));
+        }
+      }
+    }
+  }
+
+  /** Paint and ironwork on the ground: lane and bay lines, hazard stripes, manholes and drains. */
+  private markings(): void {
+    const s = this.site;
+    const paint: RGB = [0.75, 0.72, 0.6], yellow: RGB = [0.85, 0.65, 0.1];
+    const clear = (x: number, z: number) => !s.solidAt(x, z);
+    // A dashed centre line down the longest clear run of each row and column band.
+    for (let z = 9; z < s.size[1] - 8; z += 12) {
+      for (let x = 7; x < s.size[0] - 7; x += 3) {
+        if (clear(x, z) && clear(x + 1, z) && clear(x - 1, z) && clear(x, z + 2) && clear(x, z - 2)) this.cube.box(x, 0.006, z, 1.6, 0.008, 0.14, paint, MAT.painted, 0, FLAG_NOSHADOW);
+      }
+    }
+    // Parking bays against some walls.
+    for (const w of this.wallSpots()) {
+      const k = ((Math.floor(w.x / 2) * 13 + Math.floor(w.z / 2) * 7) >>> 0) % 9;
+      const yaw = w.nx !== 0 ? Math.PI / 2 : 0;
+      const at = (d: number, out: number): [number, number] => [w.x + w.nz * d + w.nx * out, w.z + w.nx * d + w.nz * out];
+      if (k === 0 || k === 1) {
+        const [px, pz] = at(1, 2.2);
+        if (clear(px, pz)) this.cube.box(px, 0.006, pz, 0.12, 0.008, 4, paint, MAT.painted, 0, FLAG_NOSHADOW, yaw);
+      } else if (k === 2) {
+        // Hazard chevrons at the foot of the wall.
+        for (let j = -3; j <= 3; j++) { const [px, pz] = at(j * 0.28, 0.45); if (clear(px, pz)) this.cube.box(px, 0.006, pz, 0.12, 0.008, 0.7, j % 2 ? yellow : [0.05, 0.05, 0.05], MAT.painted, 0, FLAG_NOSHADOW, yaw + 0.6); }
+      } else if (k === 3) {
+        // Drain grate.
+        const [px, pz] = at(0, 0.5);
+        if (clear(px, pz)) {
+          this.cube.box(px, 0.008, pz, 0.9, 0.012, 0.4, [0.25, 0.25, 0.27], MAT.gunmetal, 0, FLAG_NOSHADOW, yaw);
+          for (let j = -3; j <= 3; j++) { const [gx, gz] = at(j * 0.11, 0.5); this.cube.box(gx, 0.016, gz, 0.03, 0.006, 0.36, [0.02, 0.02, 0.02], -1, 0, FLAG_NOSHADOW, yaw); }
+        }
+      }
+    }
+    // Manhole covers.
+    for (let k = 0; k < Math.round((s.size[0] * s.size[1]) / 420); k++) {
+      const x = this.range(8, s.size[0] - 8), z = this.range(8, s.size[1] - 8);
+      if (!clear(x, z) || !clear(x + 0.6, z) || !clear(x - 0.6, z) || !clear(x, z + 0.6) || !clear(x, z - 0.6)) continue;
+      this.cylinder.box(x, 0.006, z, 0.9, 0.012, 0.9, [0.5, 0.5, 0.52], MAT.gunmetal, 0, FLAG_NOSHADOW);
+      this.cylinder.box(x, 0.012, z, 0.7, 0.012, 0.7, [0.32, 0.32, 0.34], MAT.gunmetal, 0, FLAG_NOSHADOW);
     }
   }
 
@@ -65,9 +267,10 @@ export class Scenery {
     add(m.cone, this.cones, true);
     add(m.rock, this.rocks, true);
     add(m.tuft, this.tufts, false);
+    add(m.cube, this.glow, false);
   }
   get instanceCount(): number {
-    return this.cube.n + this.sphere.n + this.cylinder.n + this.leaves.n + this.cones.n + this.rocks.n + this.tufts.n;
+    return this.cube.n + this.sphere.n + this.cylinder.n + this.leaves.n + this.cones.n + this.rocks.n + this.tufts.n + this.glow.n;
   }
 
   private range(a: number, b: number): number { return a + (b - a) * this.rnd(); }
