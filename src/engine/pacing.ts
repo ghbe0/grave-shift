@@ -37,8 +37,9 @@ export class FrameLimiter {
     const interval = 1000 / this.limit;
     // Half a millisecond of slack absorbs callback timing jitter without letting frames bunch up.
     if (now < this.next - 0.5) return false;
-    // Advance by whole intervals to keep the average rate exact; resync after a long stall.
-    this.next = now - this.next > interval * 4 ? now + interval : this.next + interval;
+    // Advance by whole intervals to keep the average rate exact. If this frame is already a full
+    // interval late (a stall), start again from now: catching up would bunch frames above the cap.
+    this.next = now - this.next > interval ? now + interval : this.next + interval;
     return true;
   }
   reset(): void { this.next = 0; }
