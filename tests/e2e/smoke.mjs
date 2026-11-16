@@ -242,13 +242,23 @@ await check('phone: touch joystick, look, fire, pause', async () => {
  * profiles, like two people; the offline transport (BroadcastChannel) only reaches pages in the
  * same profile, so there they share one.
  */
+/** Waits for the lobby; if it never shows, fails with whatever error the page is displaying. */
+async function reachLobby(page, who) {
+  try {
+    await page.waitForSelector('#screen-lobby:not([hidden])', { timeout: 60000 });
+  } catch {
+    const shown = (await page.textContent('#main-error').catch(() => '')) || 'no error on screen';
+    throw new Error(`${who} never reached the lobby (page shows: "${shown}")`);
+  }
+}
+
 async function party(net) {
   const q = net === 'local' ? '?net=local&renderer=webgl2&low' : '?renderer=webgl2&low';
   const host = await openPage(q, `${net}-host`);
   const shared = net === 'local' ? host.context() : null;
   await host.fill('#name', 'Host');
   await host.click('#btn-host');
-  await host.waitForSelector('#screen-lobby:not([hidden])', { timeout: 30000 });
+  await reachLobby(host, 'host');
   const code = await host.textContent('#lobby-code');
   const link = await host.inputValue('#lobby-link');
   if (!/^[A-Z2-9]{6}$/.test(code)) throw new Error(`bad code ${code}`);
@@ -261,7 +271,7 @@ async function party(net) {
   if ((await guest.inputValue('#join-code')) !== code) throw new Error('?party= did not fill the code');
   await guest.fill('#name', 'Guest');
   await guest.click('#btn-join');
-  await guest.waitForSelector('#screen-lobby:not([hidden])', { timeout: 30000 });
+  await reachLobby(guest, 'guest');
   await guest.click('#btn-ready');
   await host.waitForFunction(() => document.querySelector('#lobby-players')?.textContent.includes('ready'), null, { timeout: 10000 });
   await host.click('#btn-start');
@@ -291,7 +301,17 @@ async function party(net) {
 
 await check('party over the same-browser transport (offline)', () => party('local'));
 if (skipPeer) results.push({ name: 'party over WebRTC via the public PeerJS broker', ok: true, detail: 'skipped (E2E_SKIP_PEERJS=1)' });
-else await check('party over WebRTC via the public PeerJS broker', () => party('peer'));
+else await check('party over WebRTC via the public PeerJS broker', async () => {
+  try {
+    return await party('peer');
+  } catch (e) {
+    // The broker is a free public service: retry once with fresh browsers before calling it a failure.
+    console.log(`  first attempt failed (${e?.message?.split('\n')[0]}); retrying once`);
+    await Promise.all(opened.map(c => c.close().catch(() => {})));
+    opened = [];
+    return await party('peer');
+  }
+});
 
 await browser.close();
 writeFileSync(`${OUT}/summary.json`, JSON.stringify(results, null, 2));
