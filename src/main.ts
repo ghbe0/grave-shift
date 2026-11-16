@@ -620,17 +620,25 @@ class App {
   private sound(e: Float32Array): void {
     const { V } = this.sim.L;
     const s = this.session!;
-    const heavy = (w: number) => Math.min(1, (this.sim.catalog.weapons[w]?.damage ?? 50) / 200);
+    const cat = this.sim.catalog;
+    /** The sound of weapon `w` firing, near or far. */
+    const fire = (w: number, distant: boolean) => {
+      const info = cat.weapons[w];
+      if (!info) return;
+      if (info.flags & WF.rocket) this.sfx.rocket(distant);
+      else if (info.flags & WF.chain) this.sfx.energy();
+      else {
+        this.sfx.shot({ cls: info.cls, distant, suppressed: info.slug === 'vespa' || info.slug === 'bastion' });
+        // Pump shotguns and bolt-action rifles are worked by hand after each shot.
+        if (!distant && !info.auto && ((info.cls === 3 && info.mag > 2) || (info.cls === 5 && info.rpm <= 60))) this.sfx.cycle(info.cls);
+      }
+    };
     switch (e[0]) {
       case V.local:
         switch (e[1]) {
-          case 1: {
-            const flags = this.sim.catalog.weapons[e[2]]?.flags ?? 0;
-            if (flags & WF.rocket) this.sfx.rocket(); else if (flags & WF.chain) this.sfx.energy(); else this.sfx.shot(heavy(e[2]));
-            break;
-          }
+          case 1: fire(e[2], false); break;
           case 2: this.sfx.dry(); break;
-          case 3: this.sfx.reload(); break;
+          case 3: this.sfx.reload(cat.weapons[e[2]]?.reload ?? 2); break;
           case 6: case 11: this.sfx.jump(); break;
           case 7: this.sfx.land(); break;
           case 8: this.sfx.slide(); break;
@@ -638,10 +646,7 @@ class App {
           case 12: this.sfx.jump(); break;
         }
         break;
-      case V.shot:
-        if (e[1] === s.selfId) break;
-        if ((this.sim.catalog.weapons[e[2]]?.flags ?? 0) & WF.rocket) this.sfx.rocket(true); else this.sfx.shot(heavy(e[2]), true);
-        break;
+      case V.shot: if (e[1] !== s.selfId) fire(e[2], true); break;
       case V.hit: if (e[1] === s.selfId) this.sfx.hit(e[4] > 0); break;
       case V.explode: if (e[5] !== 2) this.sfx.explode(); break;
       case V.buy: if (e[1] === s.selfId) this.sfx.buy(); break;

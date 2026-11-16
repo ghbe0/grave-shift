@@ -85,6 +85,9 @@ export class Scene {
   private sway = [0, 0];
   private lastAngles = [0, 0];
   private muzzle = 0;
+  /** Smoothed first-person pose values (0..1) and their velocities. */
+  private anim = { sprint: 0, reload: 0, lower: 0, melee: 0, crouch: 0, fall: 0, strafe: 0 };
+  private animVel = { sprint: 0, reload: 0, lower: 0, melee: 0, crouch: 0, fall: 0, strafe: 0 };
   private barrAxis: boolean[];
   private staticLights: LightSrc[] = [];
   private scenery: Scenery;
@@ -621,18 +624,49 @@ export class Scene {
       this.kick *= Math.exp(-dt * 14);
       const bob = me[P['ctl.bob_amp']], ph = me[P['ctl.bob_ph']];
       const hip = 1 - ads;
-      const lower = Math.max(me[P['arms.reload_t']] > 0 ? 1 : 0, me[P['arms.switch_t']] > 0 ? Math.sin((me[P['arms.switch_t']] / Math.max(me[P['arms.switch_d']], 0.01)) * Math.PI) : 0, me[P['ctl.mode']] === 3 ? 1 : 0);
-      const sprint = me[P['ctl.sprinting']] ? 1 : 0;
+      // Every pose change eases in and out instead of snapping: values chase their targets
+      // with a critically damped spring, so the weapon has weight when you start to sprint,
+      // reload, swap, land or strike.
+      const a = this.anim;
+      const ease = (key: keyof typeof a, target: number, speed: number) => {
+        const v = this.animVel;
+        // Spring toward the target (stiffness speed^2, damping 2*speed).
+        // Small fixed steps keep it stable when a frame is long.
+        const steps = Math.max(1, Math.ceil(dt * 240));
+        const h = dt / steps;
+        for (let k = 0; k < steps; k++) {
+          v[key] += ((target - a[key]) * speed * speed - 2 * speed * v[key]) * h;
+          a[key] += v[key] * h;
+        }
+        return a[key];
+      };
+      const reloading = me[P['arms.reload_t']] > 0;
+      const swapping = me[P['arms.switch_t']] > 0 ? Math.sin((me[P['arms.switch_t']] / Math.max(me[P['arms.switch_d']], 0.01)) * Math.PI) : 0;
+      const sprint = ease('sprint', me[P['ctl.sprinting']] ? 1 : 0, 11);
+      const reload = ease('reload', reloading ? 1 : 0, 9);
+      const lower = ease('lower', Math.max(swapping, me[P['ctl.mode']] === 3 ? 1 : 0), 14);
+      const melee = ease('melee', me[P['arms.melee_t']] > 0.3 ? 1 : 0, 20);
+      const crouch = ease('crouch', me[P['ctl.crouched']] ? 1 : 0, 10);
+      // Vertical speed pushes the weapon the other way: it lifts as you drop and dips on landing.
+      const fall = ease('fall', Math.max(-1, Math.min(1, me[P['ctl.vel'] + 1] / 9)), 12);
+      // Sideways speed rolls it slightly into the strafe.
+      const side = me[P['ctl.vel']] * Math.cos(view.yaw) - me[P['ctl.vel'] + 2] * Math.sin(view.yaw);
+      const strafe = ease('strafe', Math.max(-1, Math.min(1, side / 6)), 9);
+      // The reload has a rhythm: tilt out, a dip as the magazine goes in, and back.
+      const rphase = reloading ? 1 - me[P['arms.reload_t']] / Math.max(sim.catalog.weapons[gunId]?.reload ?? 2, 0.1) : 0;
+      const magDip = reloading ? Math.sin(Math.min(1, Math.max(0, (rphase - 0.35) / 0.3)) * Math.PI) : 0;
+      // Sprinting swings the weapon with each stride.
+      const stride = Math.sin(ph) * sprint;
       const idle = Math.sin(t * 1.3) * 0.004;
       const local = mat4();
       compose(local, 0,
-        0.15 * hip + Math.cos(ph) * bob * 0.5 * hip + this.sway[0] * 0.6,
-        -0.16 * hip - 0.075 * ads + Math.sin(ph * 2) * bob * 0.4 * hip + idle - lower * 0.22 - this.sway[1] * 0.5,
-        -0.42 + this.kick * 0.05 + 0.08 * ads,
+        0.15 * hip + Math.cos(ph) * bob * 0.5 * hip + this.sway[0] * 0.6 - sprint * 0.05 * hip + stride * 0.018 - reload * 0.03 - strafe * 0.012,
+        -0.16 * hip - 0.075 * ads + Math.sin(ph * 2) * bob * 0.4 * hip + idle - lower * 0.22 - this.sway[1] * 0.5 - sprint * 0.035 * hip + Math.abs(stride) * 0.012 - reload * 0.07 - magDip * 0.035 - fall * 0.03 * hip - crouch * 0.012 * hip,
+        -0.42 + this.kick * 0.05 + 0.08 * ads + sprint * 0.03 * hip - melee * 0.12,
         1, 1, 1,
-        this.sway[0] * 1.5 + sprint * 0.5 * hip,
-        this.kick * 0.07 - lower * 0.7 - this.sway[1] - sprint * 0.25 * hip,
-        this.sway[0] * -2 + (me[P['arms.melee_t']] > 0.3 ? 0.9 : 0));
+        this.sway[0] * 1.5 + sprint * 0.5 * hip + reload * 0.22 + melee * 0.5,
+        this.kick * 0.07 - lower * 0.7 - this.sway[1] - sprint * 0.25 * hip - reload * 0.3 - magDip * 0.12 + fall * 0.08 * hip,
+        this.sway[0] * -2 + melee * 0.9 + reload * 0.35 - strafe * 0.06 + stride * 0.04 + crouch * 0.06 * hip);
       const world = mul(mat4(), camWorld, local);
       const slug = sim.catalog.weapons[gunId]?.slug;
       const myLook = this.lookOf(s.selfId);
