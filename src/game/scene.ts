@@ -4,13 +4,14 @@
 import { WF, type Sim } from '../core/sim';
 import { loadModel, type Model } from '../gfx/loader';
 import { compose, invert, lookAt, mat4, mul, ortho, perspective, transformPoint } from '../gfx/mat';
-import { cubeMesh, cylinderMesh, FLAG_NOSHADOW, FLAG_VIEWMODEL, INSTANCE_FLOATS, LIGHT_FLOATS, MAT, MAX_LIGHTS, sphereMesh, type Draw, type Frame, type Renderer } from '../gfx/renderer';
+import { cubeMesh, cylinderMesh, FLAG_NOSHADOW, FLAG_VIEWMODEL, LIGHT_FLOATS, MAT, MAX_LIGHTS, sphereMesh, type Draw, type Frame, type Renderer } from '../gfx/renderer';
+import { Batch, type V3 } from './batch';
 import { CAMOS, FATIGUES, VESTS, type Look } from './look';
+import { Scenery, SCENERY_MATS } from './scenery';
 import { MODES, TEAM_COLORS } from './rules';
 import type { Session, View } from './session';
 
 type RGB = [number, number, number];
-type V3 = [number, number, number];
 
 /** Map box material id -> procedural layer and tint. */
 const SURFACES: { layer: number; tint: RGB }[] = [
@@ -36,59 +37,6 @@ const RAGS: RGB[] = [[2.0, 1.8, 1.5], [1.4, 1.6, 2.1], [2.3, 1.9, 1.3], [1.6, 1.
 const LAMP: RGB = [1.0, 0.72, 0.42];
 
 const I = { door: 1, wallbuy: 2, perk: 3, crate: 4, bench: 5, tonic: 6, power: 7, workbench: 8, part: 9, console: 10 };
-
-/** A growable run of instances that share a mesh. */
-class Batch {
-  data = new Float32Array(INSTANCE_FLOATS * 256);
-  n = 0;
-  private grow(count = 1): number {
-    while ((this.n + count) * INSTANCE_FLOATS > this.data.length) {
-      const d = new Float32Array(this.data.length * 2);
-      d.set(this.data);
-      this.data = d;
-    }
-    const o = this.n * INSTANCE_FLOATS;
-    this.n += count;
-    return o;
-  }
-  private tail(o: number, c: ArrayLike<number>, layer: number, metallic: number, roughness: number, emissive: number, flags: number): void {
-    this.data.set([c[0], c[1], c[2], layer + 1, metallic, roughness, emissive, flags], o + 16);
-  }
-  /** Box (or any unit mesh) with translation, scale and yaw/pitch/roll. `layer` -1 = untextured. */
-  box(x: number, y: number, z: number, sx: number, sy: number, sz: number, c: ArrayLike<number>, layer = -1, emissive = 0, flags = 0, yaw = 0, pitch = 0, roll = 0, metallic = 0, roughness = 1): void {
-    const o = this.grow();
-    compose(this.data, o, x, y, z, sx, sy, sz, yaw, pitch, roll);
-    this.tail(o, c, layer, metallic, roughness, emissive, flags);
-  }
-  /** Instance with an explicit matrix. */
-  mat(matrix: ArrayLike<number>, c: ArrayLike<number>, layer: number, metallic: number, roughness: number, emissive: number, flags: number): void {
-    const o = this.grow();
-    this.data.set(matrix, o);
-    this.tail(o, c, layer, metallic, roughness, emissive, flags);
-  }
-  /** Unit sphere stretched between two points into a limb of radius r (rz for the depth axis). */
-  limb(a: V3, b: V3, r: number, c: ArrayLike<number>, layer: number, flags = 0, rz = r, side?: V3): void {
-    const d: V3 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-    const len = Math.hypot(d[0], d[1], d[2]) || 1e-4;
-    const y: V3 = [d[0] / len, d[1] / len, d[2] / len];
-    // X axis: the given side direction made perpendicular to the limb.
-    let ref = side ?? (Math.abs(y[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0]);
-    let x: V3 = [ref[1] * y[2] - ref[2] * y[1], ref[2] * y[0] - ref[0] * y[2], ref[0] * y[1] - ref[1] * y[0]];
-    if (side) { const dot = side[0] * y[0] + side[1] * y[1] + side[2] * y[2]; x = [side[0] - y[0] * dot, side[1] - y[1] * dot, side[2] - y[2] * dot]; }
-    let xl = Math.hypot(x[0], x[1], x[2]);
-    if (xl < 1e-4) { ref = [1, 0, 0]; x = [ref[1] * y[2] - ref[2] * y[1], ref[2] * y[0] - ref[0] * y[2], ref[0] * y[1] - ref[1] * y[0]]; xl = Math.hypot(x[0], x[1], x[2]) || 1; }
-    x = [x[0] / xl, x[1] / xl, x[2] / xl];
-    const z: V3 = [x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]];
-    const sy = len + r * 1.6, sx = r * 2, sz = rz * 2;
-    const o = this.grow();
-    this.data.set([x[0] * sx, x[1] * sx, x[2] * sx, 0, y[0] * sy, y[1] * sy, y[2] * sy, 0, z[0] * sz, z[1] * sz, z[2] * sz, 0, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2, 1], o);
-    this.tail(o, c, layer, 0, 1, 0, flags);
-  }
-  append(other: Batch): void {
-    const o = this.grow(other.n);
-    this.data.set(other.data.subarray(0, other.n * INSTANCE_FLOATS), o);
-  }
-}
 
 interface Tracer { a: number[]; b: number[]; t: number; color: RGB }
 /**
@@ -139,6 +87,7 @@ export class Scene {
   private muzzle = 0;
   private barrAxis: boolean[];
   private staticLights: LightSrc[] = [];
+  private scenery: Scenery;
   /** Per-frame batches, reused so a 360 fps loop does not churn the garbage collector. */
   private casters = new Batch();
   private round = new Batch();
@@ -148,7 +97,7 @@ export class Scene {
   /** Red screen-edge flash, 0..1. */
   hurt = 0;
 
-  constructor(private renderer: Renderer, private sim: Sim, private session: Session, private lookOf: (id: number) => Look) {
+  constructor(private renderer: Renderer, private sim: Sim, private session: Session, private lookOf: (id: number) => Look, detail = 1) {
     this.cube = renderer.createMesh(cubeMesh());
     this.sphere = renderer.createMesh(sphereMesh());
     this.cylinder = renderer.createMesh(cylinderMesh());
@@ -156,11 +105,16 @@ export class Scene {
     for (let o = 0; o < b.length; o += 8) {
       const flags = b[o + 7] & 0xff;
       if (flags & (2 | 4)) continue; // hidden, or a door (doors are drawn while closed)
+      if (b[o + 6] >= SCENERY_MATS.tree && b[o + 6] <= SCENERY_MATS.boulder) continue; // drawn by the scenery
       this.addBox(this.world, b, o);
       if (b[o + 6] === 1) this.trimWall(b, o);
       if (b[o + 6] === 2) this.crateDetail(b, o);
     }
     this.placeLamps();
+    this.scenery = new Scenery(renderer, this.cube, this.sphere, this.cylinder, {
+      boxes: b, size: session.mapInfo.size as [number, number], seed: session.start.map, detail,
+      solidAt: (x, z) => this.solidAt(x, z), wallAt: (x, z) => this.wallAt(x, z),
+    });
     // A barricade's boards span whichever way its opening is walled in.
     this.barrAxis = session.mapInfo.barricades.map(p => this.wallAt(p[0] - 2, p[2]) && this.wallAt(p[0] + 2, p[2]));
     for (const w of sim.catalog.weapons) this.load(`weapons/${w.slug}`);
@@ -744,6 +698,7 @@ export class Scene {
     add(this.cube, this.world, true);
     add(this.cube, casters, true);
     add(this.cylinder, this.worldRound, true);
+    this.scenery.draws(add);
     add(this.sphere, round, true);
     add(this.cube, this.worldGlow, false);
     add(this.cube, glows, false);

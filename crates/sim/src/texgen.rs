@@ -4,7 +4,7 @@
 //!   detail:  rg  = tangent-space normal xy (z is rebuilt in the shader), b = metallic, a = ambient occlusion
 //! Generating at load time keeps the download small and avoids shipping third-party art.
 
-pub const LAYERS: usize = 17;
+pub const LAYERS: usize = 20;
 pub const L_CONCRETE: usize = 0;
 pub const L_FLOOR: usize = 1;
 pub const L_PAINTED: usize = 2;
@@ -23,8 +23,13 @@ pub const L_TIGER: usize = 13;
 pub const L_ARCTIC: usize = 14;
 pub const L_CARBON: usize = 15;
 pub const L_GILDED: usize = 16;
+/// Vegetation. The leaf layer's ambient-occlusion channel doubles as a cut-out mask: the renderer
+/// discards the gaps between leaves on surfaces flagged as foliage.
+pub const L_LEAVES: usize = 17;
+pub const L_BARK: usize = 18;
+pub const L_GROUND: usize = 19;
 /// Metres covered by one repeat of each layer.
-pub const TILE: [f32; LAYERS] = [3.0, 4.0, 2.0, 2.5, 2.0, 2.0, 0.4, 0.6, 0.8, 0.3, 0.45, 0.4, 0.45, 0.4, 0.45, 0.12, 0.5];
+pub const TILE: [f32; LAYERS] = [3.0, 4.0, 2.0, 2.5, 2.0, 2.0, 0.4, 0.6, 0.8, 0.3, 0.45, 0.4, 0.45, 0.4, 0.45, 0.12, 0.5, 0.9, 0.8, 2.5];
 
 fn hash(x: i32, y: i32, seed: u32) -> f32 {
     let mut h = (x as u32).wrapping_mul(0x8da6_b343) ^ (y as u32).wrapping_mul(0xd816_3841) ^ seed.wrapping_mul(0xcb1a_b31f);
@@ -283,6 +288,57 @@ fn sample(layer: usize, u: f32, v: f32) -> Px {
             let sheen = if along_u { 0.055 } else { 0.035 };
             Px { albedo: [sheen * (0.7 + 0.3 * fibre); 3], rough: 0.22 + (1.0 - fibre) * 0.12, metal: 0.0, height: fibre * 0.3, ao: 0.9 + 0.1 * fibre }
         }
+        L_LEAVES => {
+            // Two layers of leaves: every cell of a jittered grid holds one leaf with its own
+            // tilt and shade; the space between them is a hole (low AO = cut out).
+            let leaf = |p: i32, seed: u32| {
+                let (f1, f2, id) = worley(u, v, p, seed);
+                let shade = hash(id as i32, 3, seed);
+                let cover = smooth(0.62, 0.38, f1) * smooth(0.02, 0.1, f2 - f1);
+                (cover, shade, f1)
+            };
+            let (c1, s1, d1) = leaf(8, s);
+            let (c2, s2, d2) = leaf(11, s + 5);
+            let top = c1 > 0.5;
+            let (cover, shade, dist) = if top { (c1, s1, d1) } else { (c2, s2, d2) };
+            let vein = smooth(0.0, 0.05, line(u + v * 0.6 + shade, 0.11));
+            let green = mix3([0.035, 0.105, 0.02], [0.12, 0.25, 0.045], shade);
+            let green = mix3(green, [0.26, 0.24, 0.05], smooth(0.86, 1.0, shade) * 0.6);
+            let lit = if top { 1.0 } else { 0.55 };
+            Px {
+                albedo: scale3(green, lit * (0.75 + 0.25 * vein) * (1.1 - dist * 0.5)),
+                rough: 0.55 + shade * 0.15,
+                metal: 0.0,
+                height: cover * (1.0 - dist) * if top { 1.0 } else { 0.4 } + vein * 0.05,
+                ao: if cover > 0.5 { if top { 1.0 } else { 0.62 } } else { 0.08 },
+            }
+        }
+        L_BARK => {
+            // Long vertical plates split by deep furrows, with lichen in places.
+            let warp = fbm(u, v, 4, 3, s) * 0.08;
+            let (f1, f2, id) = worley(u + warp, v * 0.22, 9, s + 1);
+            let furrow = smooth(0.0, 0.16, f2 - f1);
+            let fibre = noise(u, v * 0.08, 96, s + 2);
+            let plate = hash(id as i32, 7, s);
+            let lichen = smooth(0.66, 0.8, fbm(u, v, 5, 4, s + 3));
+            let brown = mix3([0.075, 0.055, 0.04], [0.19, 0.145, 0.105], plate * 0.6 + fibre * 0.4);
+            let col = mix3(scale3(brown, 0.35 + 0.65 * furrow), [0.2, 0.25, 0.13], lichen * 0.45);
+            Px { albedo: col, rough: 0.9, metal: 0.0, height: furrow * 0.9 + fibre * 0.25, ao: 0.45 + 0.55 * furrow }
+        }
+        L_GROUND => {
+            // Trodden earth with patches of short grass, clover and scattered pebbles.
+            let patch = fbm(u, v, 3, 5, s);
+            let grass = smooth(0.38, 0.6, patch + (fbm(u, v, 24, 3, s + 1) - 0.5) * 0.35);
+            let blades = noise(u * 0.25 + v, v, 160, s + 2) * 0.6 + noise(u, v * 0.3 + u, 200, s + 3) * 0.4;
+            let grit = fbm(u, v, 96, 3, s + 4);
+            let (p1, _, pid) = worley(u, v, 22, s + 5);
+            let pebble = smooth(0.2, 0.12, p1) * (hash(pid as i32, 1, s) > 0.72) as u32 as f32 * (1.0 - grass);
+            let dirt = scale3([0.21, 0.16, 0.105], 0.55 + grit * 0.6);
+            let turf = mix3([0.04, 0.095, 0.022], [0.115, 0.2, 0.05], blades);
+            let turf = mix3(turf, [0.2, 0.19, 0.06], smooth(0.75, 0.95, fbm(u, v, 6, 3, s + 6)) * 0.5);
+            let col = mix3(mix3(dirt, turf, grass), [0.34, 0.33, 0.31], pebble);
+            Px { albedo: col, rough: 0.95 - pebble * 0.3, metal: 0.0, height: grass * (0.3 + blades * 0.7) + grit * 0.25 * (1.0 - grass) + pebble * 0.8, ao: 0.75 + 0.25 * mix3([grit; 3], [blades; 3], grass)[0] }
+        }
         L_GILDED => {
             // Polished gold with fine scratches and slightly darker hollows.
             let fine = fbm(u, v, 64, 3, s);
@@ -352,14 +408,17 @@ pub fn generate(layer: usize, size: usize, out: &mut Vec<u8>) {
             if s == 1 {
                 break;
             }
-            level = downsample(&level, s, is_detail);
+            level = downsample(&level, s, is_detail, is_detail && layer == L_LEAVES);
             s /= 2;
         }
     }
 }
 
 /// 2x2 box filter. Albedo is averaged in linear space; normals are averaged then renormalised.
-fn downsample(src: &[u8], size: usize, normals: bool) -> Vec<u8> {
+/// With `cutout`, the occlusion channel is a leaf mask: smaller levels stay hole-or-leaf (a texel
+/// is a hole when at least half of what it covers is), so distant foliage keeps its ragged edges
+/// instead of blurring into a solid shape.
+fn downsample(src: &[u8], size: usize, normals: bool, cutout: bool) -> Vec<u8> {
     let half = size / 2;
     let mut out = vec![0u8; half * half * 4];
     let lin = |b: u8| (b as f32 / 255.0).powf(2.2);
@@ -375,6 +434,10 @@ fn downsample(src: &[u8], size: usize, normals: bool) -> Vec<u8> {
                 } else {
                     ((vals.iter().map(|v| *v as u32).sum::<u32>() + 2) / 4) as u8
                 };
+                if cutout && c == 3 {
+                    let leaves: Vec<u32> = vals.iter().filter(|v| **v >= 77).map(|v| *v as u32).collect();
+                    out[o + c] = if leaves.len() >= 3 || (leaves.len() == 2 && (x + y) % 2 == 0) { (leaves.iter().sum::<u32>() / leaves.len() as u32) as u8 } else { 20 };
+                }
             }
             if normals {
                 // Averaging shortens normals: fold the lost length into roughness-like flattening.

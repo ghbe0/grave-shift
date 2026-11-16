@@ -3,7 +3,7 @@
 // same instanced PBR path, so the WebGPU and WebGL2 backends only differ in how they draw it.
 export const VERTEX_FLOATS = 8; // position, normal, uv
 /** Procedural material layers (see crates/sim/src/texgen.rs). */
-export const MAT_LAYERS = 17;
+export const MAT_LAYERS = 20;
 
 /** Texture quality presets: material resolution and anisotropic filtering. */
 export const TEXTURE_QUALITY = {
@@ -14,7 +14,7 @@ export const TEXTURE_QUALITY = {
 } as const;
 export type TextureQuality = keyof typeof TEXTURE_QUALITY;
 export const matMips = (size: number) => Math.log2(size) + 1;
-export const MAT = { concrete: 0, floor: 1, painted: 2, rust: 3, wood: 4, brick: 5, gunmetal: 6, fabric: 7, skin: 8, polymer: 9, woodland: 10, digital: 11, desert: 12, tiger: 13, arctic: 14, carbon: 15, gilded: 16 } as const;
+export const MAT = { concrete: 0, floor: 1, painted: 2, rust: 3, wood: 4, brick: 5, gunmetal: 6, fabric: 7, skin: 8, polymer: 9, woodland: 10, digital: 11, desert: 12, tiger: 13, arctic: 14, carbon: 15, gilded: 16, leaves: 17, bark: 18, ground: 19 } as const;
 export const INSTANCE_FLOATS = 24; // mat4, (rgb tint, material layer + 1), (metallic, roughness, emissive, flags)
 export const MAX_LIGHTS = 16;
 export const LIGHT_FLOATS = 12; // pos+radius, rgb+intensity, dir+cos(cone) (cone 0 = point light)
@@ -23,6 +23,7 @@ export const LIGHT_FLOATS = 12; // pos+radius, rgb+intensity, dir+cos(cone) (con
 export const FLAG_GRID = 1; // procedural greybox grid on top of the base colour
 export const FLAG_VIEWMODEL = 2; // first-person weapon: own projection, drawn over the world
 export const FLAG_NOSHADOW = 4; // receives no sun shadow (glows, tracers)
+export const FLAG_FOLIAGE = 8; // leaves: gaps in the leaf material are cut out, light shines through, sways in the wind
 
 /** Depth below this is the viewmodel; the world is squeezed into the rest of the range. */
 export const VIEWMODEL_DEPTH = 0.05;

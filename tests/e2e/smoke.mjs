@@ -300,6 +300,51 @@ async function party(net) {
 }
 
 await check('party over the same-browser transport (offline)', () => party('local'));
+
+await check('team mode: match settings, teams, objectives and the pause roster', async () => {
+  const q = '?net=local&renderer=webgl2&low';
+  const host = await openPage(q, 'team-host');
+  await host.fill('#name', 'Host');
+  await host.click('#btn-host');
+  await reachLobby(host, 'host');
+  const code = await host.textContent('#lobby-code');
+  await host.evaluate(() => localStorage.removeItem('gs.name'));
+  const guest = await openPage(`${q}&party=${code}`, 'team-guest', host.context());
+  await guest.fill('#name', 'Guest');
+  await guest.click('#btn-join');
+  await reachLobby(guest, 'guest');
+  // Domination with a custom score limit; the guest sees the settings but cannot change them.
+  await host.selectOption('#lobby-mode', '3');
+  await host.evaluate(() => { document.getElementById('lobby-rules').open = true; });
+  await host.selectOption('#rule-score', '100');
+  await host.check('#rule-ff');
+  await guest.waitForFunction(() => document.getElementById('rule-score').value === '100' && document.getElementById('rule-ff').checked, null, { timeout: 10000 });
+  if (!(await guest.isDisabled('#rule-score'))) throw new Error('a guest can edit match settings');
+  const summary = await guest.textContent('#rules-summary');
+  const teams = await host.$$eval('#lobby-players .team', els => els.map(e => e.textContent));
+  if (teams.join() !== 'Ember,Cobalt') throw new Error(`lobby teams: ${teams}`);
+  await guest.click('#btn-ready');
+  await host.waitForFunction(() => document.querySelector('#lobby-players')?.textContent.includes('ready'), null, { timeout: 10000 });
+  await host.click('#btn-start');
+  await guest.waitForFunction(() => window.app.session?.snap, null, { timeout: 20000 });
+  await engage(host);
+  await engage(guest);
+  // Three zones on the map, team scores on screen, opposite teams on the two machines.
+  await guest.waitForFunction(() => document.querySelectorAll('#objective .zone').length === 3 && document.querySelectorAll('#objective .side').length === 2, null, { timeout: 30000 });
+  const side = page => page.evaluate(() => { const a = window.app; return { team: a.session.local()[a.sim.L.P.team], limit: a.session.snap.hdr[a.sim.L.H.score_limit] }; });
+  const [hs, gs] = [await side(host), await side(guest)];
+  if (hs.team === gs.team || ![0, 1].includes(hs.team) || ![0, 1].includes(gs.team)) throw new Error(`teams ${hs.team} and ${gs.team}`);
+  if (gs.limit !== 100) throw new Error(`score limit on the guest is ${gs.limit}`);
+  // Esc menu: both rosters; with one player a side, switching would be unfair, so the button is off.
+  await guest.evaluate(() => window.app.show('pause'));
+  await guest.waitForFunction(() => document.querySelectorAll('#pause-teams .roster').length === 2, null, { timeout: 15000 });
+  const roster = await guest.evaluate(() => document.getElementById('pause-teams').innerText.replace(/\s+/g, ' '));
+  if (!/Ember/i.test(roster) || !/Cobalt/i.test(roster) || !roster.includes('Host') || !roster.includes('Guest')) throw new Error(`pause roster: ${roster}`);
+  if (!(await guest.isDisabled('#btn-switch-team'))) throw new Error('switching to make it 2 v 0 should be disabled');
+  assertClean(host);
+  assertClean(guest);
+  return { summary, hostTeam: hs.team, guestTeam: gs.team, roster: roster.slice(0, 80) };
+});
 if (skipPeer) results.push({ name: 'party over WebRTC via the public PeerJS broker', ok: true, detail: 'skipped (E2E_SKIP_PEERJS=1)' });
 else await check('party over WebRTC via the public PeerJS broker', async () => {
   try {

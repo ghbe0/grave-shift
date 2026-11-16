@@ -41,7 +41,25 @@ tab, the party ends.
 | Mode | Players | |
 | --- | --- | --- |
 | Survival | 1-4 | Co-op rounds. Buy doors, weapons, perks; finish the map's quests. |
-| Skirmish | 2-8 | Free-for-all with your ten-point loadout, abilities and streaks. First to 25. |
+| Free-for-All | 2-8 | Everyone for themselves with their ten-point loadout, abilities and streaks. |
+| Team Deathmatch | 2-12 | Two teams, Ember and Cobalt; every kill scores for your side. |
+| Domination | 2-12 | Take and hold zones A, B and C. Held zones score over time. |
+| King of the Hill | 2-12 | Stand on the hill with no enemies on it to score. It moves every minute. |
+| Tag Hunt | 2-12 | Kills drop tags: collect enemy tags to score, your own to deny them. |
+| Weapon Ladder | 2-8 | Each kill hands you the next of 20 weapons; a knife kill knocks the victim down a rung. |
+
+The host opens **Match settings** in the lobby to change the time limit, score limit, respawn
+delay, health, friendly fire, headshots only, abilities and streaks (and, for Survival, the
+starting round and points). In team modes players are split evenly; anyone can switch sides
+from the lobby or from the pause menu (Esc) as long as the teams stay within one player of
+each other.
+
+There are 23 weapons across pistols, submachine guns, assault rifles, shotguns, light machine
+guns, marksman and sniper rifles and a rocket launcher, including burst-fire guns. All names,
+models, maps, modes and artwork are original to this project.
+
+On phones and tablets the game shows a joystick and buttons (Settings → Controls → Touch
+controls); turn the phone sideways.
 
 ## Controls
 
@@ -52,9 +70,13 @@ revive (hold) · Z tonic · 4/5/6 streaks · Tab scores · Esc pause
 
 ## Graphics and frame rate
 
+The levels are dressed with trees, bushes, ivy, grass, puddles, barrels, sandbags and boulders
+(trees and props stop bullets and block the way; leaves sway in the wind).
+
 Settings → **Texture quality** picks the resolution of the generated materials: Low (128 px,
 no anisotropic filtering), Medium (256 px, 4x), High (512 px, 8x, the default) or Ultra
-(1024 px, 16x). Changing it regenerates the textures in the background.
+(1024 px, 16x, plus sharper 4096 px sun shadows after a reload). Changing it regenerates the
+textures in the background.
 
 Settings → Video → **Frame rate** defaults to your monitor's refresh rate, which the game
 measures on the menus (and remembers): a 144 Hz monitor shows "144 fps (matches your 144 Hz

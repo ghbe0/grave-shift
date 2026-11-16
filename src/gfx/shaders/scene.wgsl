@@ -56,10 +56,20 @@ struct VOut {
   @location(9) @interpolate(flat) n2: vec3f,
 }
 
+// Foliage sways: a slow lean that grows with height plus a quick flutter.
+fn wind(world: vec3f, flags: u32) -> vec3f {
+  if ((flags & 8u) == 0u) { return world; }
+  let t = G.params.y;
+  let lean = clamp(world.y * 0.22, 0.0, 1.4) * 0.05;
+  let slow = vec2f(sin(t * 1.3 + world.x * 0.7 + world.z * 0.5), cos(t * 1.05 + world.z * 0.6 - world.x * 0.4));
+  let quick = vec2f(sin(t * 4.3 + world.y * 3.1 + world.x * 2.3), cos(t * 3.7 + world.y * 2.7 + world.z * 2.9)) * 0.007;
+  return world + vec3f(slow.x * lean + quick.x, 0.0, slow.y * lean + quick.y);
+}
+
 @vertex
 fn vs(v: VIn) -> VOut {
   var o: VOut;
-  let world = v.m0.xyz * v.pos.x + v.m1.xyz * v.pos.y + v.m2.xyz * v.pos.z + v.m3.xyz;
+  let world = wind(v.m0.xyz * v.pos.x + v.m1.xyz * v.pos.y + v.m2.xyz * v.pos.z + v.m3.xyz, u32(v.params.w));
   // Inverse-transpose columns for rotation + non-uniform scale.
   o.n0 = v.m0.xyz / dot(v.m0.xyz, v.m0.xyz);
   o.n1 = v.m1.xyz / dot(v.m1.xyz, v.m1.xyz);
@@ -88,7 +98,7 @@ fn vs(v: VIn) -> VOut {
 
 @vertex
 fn vs_shadow(v: VIn) -> @builtin(position) vec4f {
-  let world = v.m0.xyz * v.pos.x + v.m1.xyz * v.pos.y + v.m2.xyz * v.pos.z + v.m3.xyz;
+  let world = wind(v.m0.xyz * v.pos.x + v.m1.xyz * v.pos.y + v.m2.xyz * v.pos.z + v.m3.xyz, u32(v.params.w));
   return G.shadowViewProj * vec4f(world, 1.0);
 }
 
@@ -183,6 +193,9 @@ fn fs(i: VOut) -> @location(0) vec4f {
   let ln = normalize(i.localNormal);
   let mat = triplanar(max(layer, 0), i.local, ln);
   let layered = layer >= 0;
+  // Leaves: the gaps between them (marked by low occlusion in the leaf material) are cut away.
+  let foliage = (flags & 8u) != 0u;
+  if (foliage && layered && mat.ao < 0.3) { discard; }
 
   var albedo = i.color.rgb * mesh.rgb;
   var metallic = i.params.x;
@@ -203,6 +216,8 @@ fn fs(i: VOut) -> @location(0) vec4f {
   var shadow = 1.0;
   if ((flags & 4u) == 0u) { shadow = sunShadow(i.world, normalize(i.normal)); }
   var color = brdf(n, v, G.sunDir.xyz, albedo, metallic, rough) * G.sunColor.rgb * G.sunColor.w * shadow;
+  // Thin leaves let sunlight through from behind.
+  if (foliage) { color += albedo * G.sunColor.rgb * G.sunColor.w * shadow * (0.12 + 0.3 * max(dot(-n, G.sunDir.xyz), 0.0)) / PI; }
 
   let count = u32(G.params.x);
   for (var k = 0u; k < count; k++) {

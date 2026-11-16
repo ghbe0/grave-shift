@@ -24,10 +24,18 @@ layout(location=3) in vec4 m0; layout(location=4) in vec4 m1; layout(location=5)
 layout(location=7) in vec4 aColor; layout(location=8) in vec4 aParams;
 uniform mat4 uViewProj, uViewmodelProj, uShadowViewProj;
 uniform bool uShadowPass;
+uniform vec4 uGrade;
 out vec3 vWorld; out vec3 vNormal; out vec2 vUv; out vec4 vColor; flat out vec4 vParams; out vec3 vLocal; out vec3 vLocalNormal;
 flat out vec3 vN0; flat out vec3 vN1; flat out vec3 vN2;
 void main() {
   vec3 world = m0.xyz * aPos.x + m1.xyz * aPos.y + m2.xyz * aPos.z + m3.xyz;
+  if ((int(aParams.w) & 8) != 0) {
+    // Foliage sways: a slow lean that grows with height plus a quick flutter.
+    float t = uGrade.w, lean = clamp(world.y * 0.22, 0.0, 1.4) * 0.05;
+    vec2 slow = vec2(sin(t * 1.3 + world.x * 0.7 + world.z * 0.5), cos(t * 1.05 + world.z * 0.6 - world.x * 0.4));
+    vec2 quick = vec2(sin(t * 4.3 + world.y * 3.1 + world.x * 2.3), cos(t * 3.7 + world.y * 2.7 + world.z * 2.9)) * 0.007;
+    world.xz += slow * lean + quick;
+  }
   vN0 = m0.xyz / dot(m0.xyz, m0.xyz); vN1 = m1.xyz / dot(m1.xyz, m1.xyz); vN2 = m2.xyz / dot(m2.xyz, m2.xyz);
   vNormal = vN0 * aNormal.x + vN1 * aNormal.y + vN2 * aNormal.z;
   vWorld = world; vUv = aUv; vColor = aColor; vParams = aParams; vLocalNormal = aNormal;
@@ -99,6 +107,8 @@ void main() {
     metallic = d.b;
     ao = d.a;
     n = normalize(vN0 * pn.x + vN1 * pn.y + vN2 * pn.z);
+    // Leaves: the gaps between them (marked by low occlusion in the leaf material) are cut away.
+    if ((flags & 8) != 0 && ao < 0.3) discard;
   }
   rough = clamp(rough, 0.05, 1.0);
   if (dot(n, v) < 0.0) n = normalize(n + v * (0.01 - dot(n, v)));
@@ -113,6 +123,7 @@ void main() {
     }
   }
   vec3 color = brdf(n, v, uSunDir, albedo, metallic, rough) * uSunColor * 3.0 * shadow;
+  if ((flags & 8) != 0) color += albedo * uSunColor * 3.0 * shadow * (0.12 + 0.3 * max(dot(-n, uSunDir), 0.0)) / PI;
   for (int k = 0; k < uLightCount; k++) {
     vec4 pr = uLights[k * 3], col = uLights[k * 3 + 1], dc = uLights[k * 3 + 2];
     vec3 to = pr.xyz - vWorld; float d = length(to);

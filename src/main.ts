@@ -105,7 +105,7 @@ class App {
     this.resize();
     addEventListener('resize', () => this.resize());
     const tex = TEXTURE_QUALITY[this.settings.textures];
-    const quality = { shadowSize: params.has('low') ? 1024 : 2048, post: !params.has('low'), offscreen: params.has('offscreen'), textureSize: tex.size, anisotropy: tex.anisotropy };
+    const quality = { shadowSize: params.has('low') ? 1024 : this.settings.textures === 'ultra' ? 4096 : 2048, post: !params.has('low'), offscreen: params.has('offscreen'), textureSize: tex.size, anisotropy: tex.anisotropy };
     this.renderer = await createRenderer(this.canvas, params.get('renderer'), quality);
     this.canvas = $<HTMLCanvasElement>('canvas') ?? this.canvas;
     this.rendererName = this.renderer.kind === 'webgpu' ? 'WebGPU' : 'WebGL2 (fallback)';
@@ -574,7 +574,8 @@ class App {
     this.session = session;
     for (const p of start.players) this.looks.set(p.id, p.look);
     this.looks.set(selfId, this.look);
-    this.scene = new Scene(this.renderer, this.sim, session, id => this.lookOf(id));
+    // Phones draw about half the grass and ivy.
+    this.scene = new Scene(this.renderer, this.sim, session, id => this.lookOf(id), document.body.classList.contains('touch') ? 0.5 : 1);
     session.onEvent = e => {
       if (!this.scene || !this.session) return;
       this.scene.handleEvent(e, this.session.view(this.settings.fov));
