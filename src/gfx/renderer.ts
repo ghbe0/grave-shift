@@ -2,10 +2,18 @@
 // buffer plus draw ranges. Everything (greybox cubes, characters, glTF models) goes through the
 // same instanced PBR path, so the WebGPU and WebGL2 backends only differ in how they draw it.
 export const VERTEX_FLOATS = 8; // position, normal, uv
-/** Procedural material layers (see crates/sim/src/texgen.rs) and their base resolution. */
+/** Procedural material layers (see crates/sim/src/texgen.rs). */
 export const MAT_LAYERS = 10;
-export const MAT_SIZE = 512;
-export const MAT_MIPS = Math.log2(MAT_SIZE) + 1;
+
+/** Texture quality presets: material resolution and anisotropic filtering. */
+export const TEXTURE_QUALITY = {
+  low: { size: 128, anisotropy: 1, label: 'Low' },
+  medium: { size: 256, anisotropy: 4, label: 'Medium' },
+  high: { size: 512, anisotropy: 8, label: 'High' },
+  ultra: { size: 1024, anisotropy: 16, label: 'Ultra' },
+} as const;
+export type TextureQuality = keyof typeof TEXTURE_QUALITY;
+export const matMips = (size: number) => Math.log2(size) + 1;
 export const MAT = { concrete: 0, floor: 1, painted: 2, rust: 3, wood: 4, brick: 5, gunmetal: 6, fabric: 7, skin: 8, polymer: 9 } as const;
 export const INSTANCE_FLOATS = 24; // mat4, (rgb tint, material layer + 1), (metallic, roughness, emissive, flags)
 export const MAX_LIGHTS = 16;
@@ -69,8 +77,14 @@ export interface Renderer {
   readonly kind: 'webgpu' | 'webgl2';
   createMesh(data: MeshData): number;
   /**
+   * Reallocates the material textures at `size` (a power of two) with the given anisotropic
+   * filtering. Layers show neutral grey until `setMaterial` fills them again.
+   */
+  setMaterialQuality(size: number, anisotropy: number): void;
+  /**
    * Uploads one material layer: `data` is the surface mip chain followed by the detail mip chain
-   * (RGBA8, MAT_SIZE square down to 1x1). `tile` is metres per repeat.
+   * (RGBA8, the current material size square down to 1x1). `tile` is metres per repeat.
+   * Data generated for a different size is ignored.
    */
   setMaterial(layer: number, data: Uint8Array, tile: number): void;
   resize(width: number, height: number): void;
@@ -80,6 +94,9 @@ export interface Renderer {
 export interface Quality {
   shadowSize: number;
   post: boolean;
+  /** Initial material resolution and anisotropic filtering (see TEXTURE_QUALITY). */
+  textureSize: number;
+  anisotropy: number;
   /** WebGPU only: draw into an offscreen texture instead of the canvas (headless tests). */
   offscreen?: boolean;
 }
@@ -120,26 +137,28 @@ export function cubeMesh(): MeshData {
   return { vertices: new Float32Array(v), indices: new Uint16Array(idx) };
 }
 
-/** Byte offset of mip `level` of map `map` (0 surface, 1 detail) in a material layer upload. */
-export function matOffset(map: number, level: number): number {
+/** Byte offset of mip `level` of map `map` (0 surface, 1 detail) in a material layer upload of `size`. */
+export function matOffset(map: number, level: number, size: number): number {
   let off = 0;
   for (let m = 0; m <= map; m++) {
-    for (let l = 0; l < MAT_MIPS; l++) {
+    for (let l = 0; l < matMips(size); l++) {
       if (m === map && l === level) return off;
-      const s = MAT_SIZE >> l;
+      const s = size >> l;
       off += s * s * 4;
     }
   }
   return off;
 }
+/** Total bytes of one material layer upload of `size`. */
+export const matBytes = (size: number) => matOffset(1, 0, size) * 2;
 
 /** A neutral layer (mid-grey, rough, flat) shown until the generated one arrives. */
-export function flatMaterial(): Uint8Array {
-  const out = new Uint8Array(matOffset(1, 0) * 2);
+export function flatMaterial(size: number): Uint8Array {
+  const out = new Uint8Array(matBytes(size));
+  const half = matOffset(1, 0, size);
   for (let map = 0; map < 2; map++) {
     const texel = map === 0 ? [118, 118, 118, 217] : [128, 128, 0, 255];
-    const start = matOffset(map, 0), end = map === 0 ? matOffset(1, 0) : out.length;
-    for (let i = start; i < end; i += 4) out.set(texel, i);
+    for (let i = map * half; i < (map + 1) * half; i += 4) out.set(texel, i);
   }
   return out;
 }

@@ -1,6 +1,6 @@
 // WebGPU backend: shadow pass -> 4x MSAA HDR forward PBR pass -> bloom chain -> composite (sky,
 // motion blur, depth of field, tone map, grade, grain) to the canvas.
-import { flatMaterial, INSTANCE_FLOATS, LIGHT_FLOATS, MAT_LAYERS, MAT_MIPS, MAT_SIZE, matOffset, MAX_LIGHTS, VERTEX_FLOATS, VIEWMODEL_DEPTH, type Frame, type MeshData, type Quality, type Renderer } from './renderer';
+import { flatMaterial, INSTANCE_FLOATS, LIGHT_FLOATS, MAT_LAYERS, matBytes, matMips, matOffset, MAX_LIGHTS, VERTEX_FLOATS, VIEWMODEL_DEPTH, type Frame, type MeshData, type Quality, type Renderer } from './renderer';
 import postSrc from './shaders/post.wgsl?raw';
 import sceneSrc from './shaders/scene.wgsl?raw';
 
@@ -31,14 +31,18 @@ export class WebGPURenderer implements Renderer {
   private compositePipe: GPURenderPipeline;
   private texLayout: GPUBindGroupLayout;
   private postLayout: GPUBindGroupLayout;
-  private sceneBind: GPUBindGroup;
+  private sceneBind!: GPUBindGroup;
   private shadowBind: GPUBindGroup;
   private shadowView: GPUTextureView;
   private linear: GPUSampler;
+  /** Mesh textures (glTF). Material layers get their own sampler, rebuilt with the quality setting. */
   private repeat: GPUSampler;
   private white: GPUTexture;
-  private matSurface: GPUTexture;
-  private matDetail: GPUTexture;
+  private matSurface!: GPUTexture;
+  private matDetail!: GPUTexture;
+  private matSize = 0;
+  private sceneLayout: GPUBindGroupLayout;
+  private shadowCompare: GPUSampler;
   private hdrMs!: GPUTexture;
   private hdr!: GPUTexture;
   private depth!: GPUTexture;
@@ -81,18 +85,12 @@ export class WebGPURenderer implements Renderer {
     this.white = d.createTexture({ size: [1, 1], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
     d.queue.writeTexture({ texture: this.white }, new Uint8Array([255, 255, 255, 255]), {}, [1, 1]);
 
-    const matTex = (format: GPUTextureFormat) => d.createTexture({ size: [MAT_SIZE, MAT_SIZE, MAT_LAYERS], format, mipLevelCount: MAT_MIPS, usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
-    this.matSurface = matTex('rgba8unorm-srgb');
-    this.matDetail = matTex('rgba8unorm');
-    const flat = flatMaterial();
-    for (let layer = 0; layer < MAT_LAYERS; layer++) this.uploadLayer(layer, flat);
-
     const shadowTex = d.createTexture({ size: [quality.shadowSize, quality.shadowSize], format: DEPTH, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
     this.shadowView = shadowTex.createView();
 
     const uniform: GPUBindGroupLayoutEntry = { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} };
     const shadowLayout = d.createBindGroupLayout({ entries: [uniform] });
-    const sceneLayout = d.createBindGroupLayout({
+    const sceneLayout = (this.sceneLayout = d.createBindGroupLayout({
       entries: [
         uniform,
         { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'depth' } },
@@ -101,7 +99,7 @@ export class WebGPURenderer implements Renderer {
         { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { viewDimension: '2d-array' } },
         { binding: 5, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
       ],
-    });
+    }));
     this.texLayout = d.createBindGroupLayout({
       entries: [
         { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} },
@@ -118,17 +116,8 @@ export class WebGPURenderer implements Renderer {
       ],
     });
     this.shadowBind = d.createBindGroup({ layout: shadowLayout, entries: [{ binding: 0, resource: { buffer: this.globalsBuf } }] });
-    this.sceneBind = d.createBindGroup({
-      layout: sceneLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.globalsBuf } },
-        { binding: 1, resource: this.shadowView },
-        { binding: 2, resource: d.createSampler({ compare: 'less', magFilter: 'linear', minFilter: 'linear' }) },
-        { binding: 3, resource: this.matSurface.createView({ dimension: '2d-array' }) },
-        { binding: 4, resource: this.matDetail.createView({ dimension: '2d-array' }) },
-        { binding: 5, resource: this.repeat },
-      ],
-    });
+    this.shadowCompare = d.createSampler({ compare: 'less', magFilter: 'linear', minFilter: 'linear' });
+    this.setMaterialQuality(quality.textureSize, quality.anisotropy);
 
     const scene = d.createShaderModule({ code: sceneSrc });
     const post = d.createShaderModule({ code: postSrc });
@@ -172,18 +161,43 @@ export class WebGPURenderer implements Renderer {
     return this.device.createBuffer({ size: this.instanceCap * INSTANCE_FLOATS * 4, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
   }
 
+  setMaterialQuality(size: number, anisotropy: number): void {
+    const d = this.device;
+    this.matSurface?.destroy();
+    this.matDetail?.destroy();
+    this.matSize = size;
+    const matTex = (format: GPUTextureFormat) => d.createTexture({ size: [size, size, MAT_LAYERS], format, mipLevelCount: matMips(size), usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    this.matSurface = matTex('rgba8unorm-srgb');
+    this.matDetail = matTex('rgba8unorm');
+    const flat = flatMaterial(size);
+    for (let layer = 0; layer < MAT_LAYERS; layer++) this.uploadLayer(layer, flat);
+    const sampler = d.createSampler({ magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear', addressModeU: 'repeat', addressModeV: 'repeat', maxAnisotropy: Math.max(1, Math.min(16, anisotropy)) });
+    this.sceneBind = d.createBindGroup({
+      layout: this.sceneLayout,
+      entries: [
+        { binding: 0, resource: { buffer: this.globalsBuf } },
+        { binding: 1, resource: this.shadowView },
+        { binding: 2, resource: this.shadowCompare },
+        { binding: 3, resource: this.matSurface.createView({ dimension: '2d-array' }) },
+        { binding: 4, resource: this.matDetail.createView({ dimension: '2d-array' }) },
+        { binding: 5, resource: sampler },
+      ],
+    });
+  }
+
   private uploadLayer(layer: number, data: Uint8Array): void {
+    const size = this.matSize;
     for (const [map, tex] of [[0, this.matSurface], [1, this.matDetail]] as const) {
-      for (let level = 0; level < MAT_MIPS; level++) {
-        const s = MAT_SIZE >> level;
-        const off = matOffset(map, level);
+      for (let level = 0; level < matMips(size); level++) {
+        const s = size >> level;
+        const off = matOffset(map, level, size);
         this.device.queue.writeTexture({ texture: tex, mipLevel: level, origin: [0, 0, layer] }, data.subarray(off, off + s * s * 4) as Uint8Array<ArrayBuffer>, { bytesPerRow: s * 4, rowsPerImage: s }, [s, s, 1]);
       }
     }
   }
 
   setMaterial(layer: number, data: Uint8Array, tile: number): void {
-    if (layer < 0 || layer >= MAT_LAYERS || data.length < matOffset(1, 0) * 2) return;
+    if (layer < 0 || layer >= MAT_LAYERS || data.length !== matBytes(this.matSize)) return;
     this.uploadLayer(layer, data);
     this.tiles[layer] = tile;
   }

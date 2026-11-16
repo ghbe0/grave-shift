@@ -6,8 +6,9 @@ import { Input } from './engine/input';
 import { Ticker } from './engine/ticker';
 import { Scene } from './game/scene';
 import { Session } from './game/session';
-import { streamMaterials } from './gfx/materials';
-import { createRenderer, type Renderer } from './gfx/renderer';
+import { FPS_LIMITS, FrameLimiter, FrameMeter } from './engine/pacing';
+import { streamMaterials, type MaterialStream } from './gfx/materials';
+import { createRenderer, TEXTURE_QUALITY, type Renderer, type TextureQuality } from './gfx/renderer';
 import { clientToken, GuestLobby, HostLobby, MODES, type KickReason, type LobbyState, type StartMsg } from './netcode/lobby';
 import { codeFromUrl, normalizeCode, partyLink, setUrlCode } from './netcode/party';
 import { createTransport, NetError } from './netcode/transport';
@@ -18,10 +19,21 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 const params = new URLSearchParams(location.search);
 const transport = createTransport(params.get('net'));
 
-interface Settings { sens: number; fov: number; volume: number; blur: boolean; dof: boolean }
-const DEFAULTS: Settings = { sens: 1, fov: 90, volume: 0.5, blur: true, dof: true };
+interface Settings {
+  sens: number; fov: number; volume: number; blur: boolean; dof: boolean;
+  /** Material resolution preset. */
+  textures: TextureQuality;
+  /** Frame rate cap; 0 draws every display refresh (up to 360 Hz and beyond). */
+  fpsLimit: number;
+  showFps: boolean;
+}
+const DEFAULTS: Settings = { sens: 1, fov: 90, volume: 0.5, blur: true, dof: true, textures: 'high', fpsLimit: 0, showFps: false };
 function loadSettings(): Settings {
-  try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem('gs.settings') ?? '{}') }; } catch { return { ...DEFAULTS }; }
+  let s: Settings;
+  try { s = { ...DEFAULTS, ...JSON.parse(localStorage.getItem('gs.settings') ?? '{}') }; } catch { s = { ...DEFAULTS }; }
+  if (!(s.textures in TEXTURE_QUALITY)) s.textures = DEFAULTS.textures;
+  if (!(FPS_LIMITS as readonly number[]).includes(s.fpsLimit)) s.fpsLimit = 0;
+  return s;
 }
 function saveSettings(s: Settings): void { try { localStorage.setItem('gs.settings', JSON.stringify(s)); } catch { /* ignore */ } }
 
@@ -54,21 +66,25 @@ class App {
   private zoom = 1;
   /** Resolves when every procedural material layer is on the GPU. */
   materials: Promise<void> = Promise.resolve();
+  private materialStream: MaterialStream | null = null;
+  private rendererName = '';
+  private limiter = new FrameLimiter();
+  /** Exposed for the settings screen and automated tests. */
+  meter = new FrameMeter();
+  private lastHud = 0;
 
   async init(): Promise<void> {
     this.sim = await loadSim();
     this.hud = new Hud(this.sim);
     this.resize();
     addEventListener('resize', () => this.resize());
-    const quality = { shadowSize: params.has('low') ? 1024 : 2048, post: !params.has('low'), offscreen: params.has('offscreen') };
+    const tex = TEXTURE_QUALITY[this.settings.textures];
+    const quality = { shadowSize: params.has('low') ? 1024 : 2048, post: !params.has('low'), offscreen: params.has('offscreen'), textureSize: tex.size, anisotropy: tex.anisotropy };
     this.renderer = await createRenderer(this.canvas, params.get('renderer'), quality);
     this.canvas = $<HTMLCanvasElement>('canvas') ?? this.canvas;
-    const rendererName = this.renderer.kind === 'webgpu' ? 'WebGPU' : 'WebGL2 (fallback)';
-    $('renderer-info').textContent = `Renderer: ${rendererName} · generating materials...`;
-    // Materials stream in while the menu is up; the level shows neutral grey until each arrives.
-    this.materials = streamMaterials(this.renderer, this.sim, (done, total) => {
-      $('renderer-info').textContent = done < total ? `Renderer: ${rendererName} · generating materials ${done}/${total}` : `Renderer: ${rendererName}`;
-    });
+    this.rendererName = this.renderer.kind === 'webgpu' ? 'WebGPU' : 'WebGL2 (fallback)';
+    this.limiter.limit = this.settings.fpsLimit;
+    this.applyTextures(false);
     this.editor = new LoadoutEditor(this.sim, $('loadout-grid'), $('loadout-points'), $('loadout-error'));
     this.editor.onChange = l => { this.host?.setLoadout(l); this.guest?.setLoadout(l); };
     this.bindMenus();
@@ -86,6 +102,25 @@ class App {
     requestAnimationFrame(t => this.frame(t));
     // Simulation runs on its own clock so a slow or hidden page does not slow the match down.
     new Ticker(60, () => this.simulate());
+  }
+
+  /**
+   * (Re)generates the material textures at the selected quality. Materials stream in while the
+   * menu is up; surfaces show neutral grey until each layer arrives.
+   */
+  private applyTextures(reallocate: boolean): void {
+    const tex = TEXTURE_QUALITY[this.settings.textures];
+    this.materialStream?.cancel();
+    if (reallocate) this.renderer.setMaterialQuality(tex.size, tex.anisotropy);
+    const status = (text: string) => {
+      $('renderer-info').textContent = `Renderer: ${this.rendererName} · ${text}`;
+      $('tex-status').textContent = text;
+    };
+    status(`generating ${tex.label.toLowerCase()} textures...`);
+    this.materialStream = streamMaterials(this.renderer, this.sim, tex.size, (done, total) => {
+      status(done < total ? `generating ${tex.label.toLowerCase()} textures ${done}/${total}` : `${tex.label} textures (${tex.size} px, ${tex.anisotropy}x filtering)`);
+    });
+    this.materials = this.materialStream.done;
   }
 
   private name(): string { return $<HTMLInputElement>('name').value.trim(); }
@@ -157,13 +192,41 @@ class App {
     bind('set-volume', 'volume', () => (this.sfx.volume = s.volume));
     bind('set-blur', 'blur', () => {});
     bind('set-dof', 'dof', () => {});
+    bind('set-showfps', 'showFps', () => ($('fps').hidden = !s.showFps));
+    $('fps').hidden = !s.showFps;
+
+    const texSel = $<HTMLSelectElement>('set-tex');
+    for (const [key, q] of Object.entries(TEXTURE_QUALITY)) texSel.add(new Option(`${q.label} (${q.size} px, ${q.anisotropy}x filtering)`, key));
+    texSel.value = s.textures;
+    texSel.onchange = () => {
+      s.textures = texSel.value as TextureQuality;
+      saveSettings(s);
+      this.applyTextures(true);
+    };
+    const fpsSel = $<HTMLSelectElement>('set-fps');
+    for (const n of FPS_LIMITS) fpsSel.add(new Option(n ? `${n} fps` : 'Match display (unlimited)', String(n)));
+    fpsSel.value = String(s.fpsLimit);
+    fpsSel.onchange = () => {
+      s.fpsLimit = +fpsSel.value;
+      this.limiter.limit = s.fpsLimit;
+      this.limiter.reset();
+      saveSettings(s);
+    };
 
     // Clicking the game resumes; Escape (handled by the browser) releases the mouse and pauses.
     this.canvas.onclick = () => { if (this.session && this.screen === 'none') this.input.lock(); };
   }
 
   private openLoadout(back: string): void { this.back = back; this.editor.render(); this.show('loadout'); }
-  private openSettings(back: string): void { this.back = back; this.show('settings'); }
+  private openSettings(back: string): void {
+    this.back = back;
+    this.show('settings');
+    // Report the measured refresh rate so players know what "Match display" means on their screen.
+    const hz = this.meter.displayHz;
+    $('display-hz').textContent = hz
+      ? `Your display refreshes at about ${hz} Hz. Browsers draw in step with the display, so the game runs at up to ${hz} fps; a 360 Hz monitor gets 360 fps.`
+      : 'Browsers draw in step with the display, so the game runs at up to your monitor\'s refresh rate (360 fps on a 360 Hz monitor).';
+  }
 
   // ---- Party flow ----
 
@@ -332,10 +395,13 @@ class App {
 
   private frame(now: number): void {
     requestAnimationFrame(t => this.frame(t));
+    this.meter.refresh(now);
+    const s = this.session;
+    if (!s || !this.scene) { this.last = now; return; }
+    if (!this.limiter.shouldRender(now)) return;
     const dt = Math.min((now - this.last) / 1000, 0.1);
     this.last = now;
-    const s = this.session;
-    if (!s || !this.scene) return;
+    this.meter.rendered(now);
     // Apply anything due before drawing, so the camera never lags a tick behind input.
     this.simulate();
     const me = s.local();
@@ -349,7 +415,12 @@ class App {
     const view = s.view(this.settings.fov);
     const frame = this.scene.build(view, dt, this.canvas.width / this.canvas.height, { fov: this.settings.fov, motionBlur: this.settings.blur, dof: this.settings.dof });
     this.renderer.render(frame);
-    this.hud.update(s, this.input.scoreboard);
+    // The HUD is DOM text: refreshing it faster than 60 Hz costs time and shows nothing new.
+    if (now - this.lastHud >= 16) {
+      this.lastHud = now;
+      this.hud.update(s, this.input.scoreboard);
+      if (this.settings.showFps) $('fps').textContent = `${Math.round(this.meter.fps)} fps · ${this.meter.frameMs.toFixed(1)} ms${this.meter.displayHz ? ` · ${this.meter.displayHz} Hz display` : ''}`;
+    }
   }
 }
 

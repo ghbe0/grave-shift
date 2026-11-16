@@ -143,6 +143,38 @@ await check('solo survival on WebGPU (software adapter)', async () => {
   return h;
 });
 
+await check('settings: texture quality, frame rate cap and FPS counter', async () => {
+  const page = await openPage('?renderer=webgl2&low', 'settings');
+  await page.evaluate(() => window.app.materials);
+  await page.click('#btn-settings');
+  const texOptions = await page.$$eval('#set-tex option', o => o.map(x => x.value));
+  const fpsOptions = await page.$$eval('#set-fps option', o => o.map(x => +x.value));
+  if (texOptions.join() !== 'low,medium,high,ultra') throw new Error(`texture options ${texOptions}`);
+  if (!fpsOptions.includes(360) || !fpsOptions.includes(0)) throw new Error(`fps options ${fpsOptions}`);
+  // Low textures: the GPU arrays are rebuilt at 128 px and every layer is regenerated at that size.
+  await page.selectOption('#set-tex', 'low');
+  await page.waitForFunction(() => /Low textures/.test(document.getElementById('tex-status').textContent), null, { timeout: 60000 });
+  const size = await page.evaluate(() => window.app.renderer.matSize);
+  if (size !== 128) throw new Error(`material size ${size}`);
+  await page.selectOption('#set-fps', '30');
+  await page.check('#set-showfps');
+  await page.click('#btn-settings-done');
+  // Play with a 30 fps cap: rendered frames must stay at or under the cap.
+  await page.evaluate(() => document.getElementById('btn-solo').click());
+  await engage(page);
+  await page.waitForFunction(() => window.app.session?.snap, null, { timeout: 30000 });
+  const before = await page.evaluate(() => window.app.meter.fps);
+  await page.waitForTimeout(3000);
+  const fps = await page.evaluate(() => window.app.meter.fps);
+  const counter = await page.textContent('#fps');
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('gs.settings')));
+  if (fps > 31.5) throw new Error(`rendering at ${fps.toFixed(1)} fps with a 30 cap`);
+  if (!/fps/.test(counter ?? '') || await page.isHidden('#fps')) throw new Error('FPS counter not shown');
+  if (saved.textures !== 'low' || saved.fpsLimit !== 30 || saved.showFps !== true) throw new Error(`settings not saved: ${JSON.stringify(saved)}`);
+  assertClean(page);
+  return { materialSize: size, fps: +fps.toFixed(1), counter, firstSample: +before.toFixed(1) };
+});
+
 /**
  * Host + guest. The guest joins by opening the invite link. Over WebRTC they are separate browser
  * profiles, like two people; the offline transport (BroadcastChannel) only reaches pages in the

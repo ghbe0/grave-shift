@@ -31,6 +31,19 @@ run into a wall while airborne to wall-run · Left mouse fire · Right mouse aim
 1/2, X or wheel switch weapon · V melee · G lethal · E tactical · Q ability · F use / buy /
 revive (hold) · Z tonic · 4/5/6 streaks · Tab scores · Esc pause
 
+## Graphics and frame rate
+
+Settings → **Texture quality** picks the resolution of the generated materials: Low (128 px,
+no anisotropic filtering), Medium (256 px, 4x), High (512 px, 8x, the default) or Ultra
+(1024 px, 16x). Changing it regenerates the textures in the background.
+
+Settings → **Frame rate limit** caps rendering at 30, 60, 120, 144, 165, 240 or 360 fps, or
+"Match display" to draw every refresh. Browsers draw in step with the monitor, so a 360 Hz
+monitor runs the game at up to 360 fps; the settings screen shows the refresh rate it measured.
+The simulation always ticks at 60 Hz, and the camera, other players and zombies are blended
+between ticks, so every displayed frame moves. **Show FPS counter** adds a frame rate and
+frame time readout.
+
 ## How it is built
 
 ```
@@ -53,6 +66,7 @@ revive (hold) · Z tonic · 4/5/6 streaks · Tab scores · Esc pause
 │   ├── core/sim.ts               Typed bindings over the Wasm ABI
 │   ├── engine/input.ts           Pointer Lock mouse look and key bindings
 │   ├── engine/ticker.ts          Worker clock so the match keeps running in a hidden tab
+│   ├── engine/pacing.ts          Frame rate cap, FPS meter and display refresh detection
 │   ├── game/session.ts           Solo / host / guest match driver
 │   ├── game/scene.ts             Builds each rendered frame from match state
 │   ├── gfx/renderer.ts           Backend-neutral renderer interface; WebGPU with WebGL2 fallback
@@ -61,6 +75,7 @@ revive (hold) · Z tonic · 4/5/6 streaks · Tab scores · Esc pause
 │   ├── gfx/shaders/scene.wgsl    GGX PBR, PCF sun shadows, point/spot lights, fog
 │   ├── gfx/shaders/post.wgsl     Bloom, camera motion blur, depth of field, ACES tone map
 │   ├── gfx/loader.ts             glTF 2.0 / .glb loader with embedded textures
+│   ├── gfx/materials.ts          Streams procedural material layers from a worker (texworker.ts)
 │   ├── gfx/mat.ts                Matrix maths
 │   ├── netcode/party.ts          6-character codes and ?party=CODE links
 │   ├── netcode/transport.ts      PeerJS WebRTC transport, plus a same-browser test transport
@@ -126,5 +141,7 @@ can test a party without the internet. `?offscreen` renders WebGPU into a textur
 
 ## Deploying
 
-Push to `main`. The workflow builds and publishes `dist/`. In the repository settings, set
-**Pages → Build and deployment → Source** to **GitHub Actions** once.
+Push to `main`. The workflow builds, tests, plays the built site in a browser and publishes
+`dist/` only if everything passes. Pages must publish from **GitHub Actions** (Settings → Pages
+→ Build and deployment → Source); the `pages-setup` job checks this on every push and switches
+it when its token is allowed to.

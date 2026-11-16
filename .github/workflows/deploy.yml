@@ -87,9 +87,33 @@ jobs:
           path: e2e-results
           retention-days: 7
 
+  # Pages has to publish what this workflow uploads, not the raw branch. Reports the current
+  # setting and switches it to "GitHub Actions" when the token is allowed to.
+  pages-setup:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+    steps:
+      - name: Check and set the Pages source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          config=$(gh api "repos/$REPO/pages" 2>&1) || { echo "::warning::Could not read Pages settings: $config"; exit 0; }
+          echo "$config" | jq '{build_type, source, html_url, status}'
+          if [ "$(echo "$config" | jq -r .build_type)" = "workflow" ]; then
+            echo "Pages already publishes from GitHub Actions."
+          elif out=$(gh api -X PUT "repos/$REPO/pages" -f build_type=workflow 2>&1); then
+            echo "Switched the Pages source to GitHub Actions."
+            gh api "repos/$REPO/pages" | jq '{build_type, source}'
+          else
+            echo "::warning::Pages still deploys from a branch, and this token cannot change it ($out). Set Settings > Pages > Source to GitHub Actions."
+          fi
+
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [build, e2e]
+    needs: [build, e2e, pages-setup]
     runs-on: ubuntu-latest
     permissions:
       pages: write

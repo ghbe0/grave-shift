@@ -1,6 +1,6 @@
 // WebGL2 fallback. Same instanced PBR lighting, material layers, sun shadow, sky and colour grade
 // as the WebGPU path, drawn straight to the canvas (browser MSAA). No bloom, motion blur or DoF.
-import { flatMaterial, INSTANCE_FLOATS, LIGHT_FLOATS, MAT_LAYERS, MAT_MIPS, MAT_SIZE, matOffset, MAX_LIGHTS, VERTEX_FLOATS, VIEWMODEL_DEPTH, type Frame, type MeshData, type Quality, type Renderer } from './renderer';
+import { flatMaterial, INSTANCE_FLOATS, LIGHT_FLOATS, MAT_LAYERS, matBytes, matMips, matOffset, MAX_LIGHTS, VERTEX_FLOATS, VIEWMODEL_DEPTH, type Frame, type MeshData, type Quality, type Renderer } from './renderer';
 
 const GRADE = `
 vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
@@ -176,8 +176,9 @@ export class WebGL2Renderer implements Renderer {
   private shadowFbo: WebGLFramebuffer;
   private shadowTex: WebGLTexture;
   private white: WebGLTexture;
-  private matSurface: WebGLTexture;
-  private matDetail: WebGLTexture;
+  private matSurface: WebGLTexture | null = null;
+  private matDetail: WebGLTexture | null = null;
+  private matSize = 0;
   private tiles = new Float32Array(12).fill(2);
   private emptyVao: WebGLVertexArrayObject;
   private size: [number, number] = [1, 1];
@@ -213,20 +214,7 @@ export class WebGL2Renderer implements Renderer {
     gl.bindTexture(gl.TEXTURE_2D, this.white);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
 
-    const matTex = (format: number) => {
-      const t = gl.createTexture()!;
-      gl.bindTexture(gl.TEXTURE_2D_ARRAY, t);
-      gl.texStorage3D(gl.TEXTURE_2D_ARRAY, MAT_MIPS, format, MAT_SIZE, MAT_SIZE, MAT_LAYERS);
-      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      const aniso = gl.getExtension('EXT_texture_filter_anisotropic');
-      if (aniso) gl.texParameterf(gl.TEXTURE_2D_ARRAY, aniso.TEXTURE_MAX_ANISOTROPY_EXT, 8);
-      return t;
-    };
-    this.matSurface = matTex(gl.SRGB8_ALPHA8);
-    this.matDetail = matTex(gl.RGBA8);
-    const flat = flatMaterial();
-    for (let layer = 0; layer < MAT_LAYERS; layer++) this.uploadLayer(layer, flat);
+    this.setMaterialQuality(quality.textureSize, quality.anisotropy);
 
     const s = quality.shadowSize;
     this.shadowTex = gl.createTexture()!;
@@ -247,20 +235,43 @@ export class WebGL2Renderer implements Renderer {
     this.resize(canvas.width, canvas.height);
   }
 
+  setMaterialQuality(size: number, anisotropy: number): void {
+    const gl = this.gl;
+    if (this.matSurface) gl.deleteTexture(this.matSurface);
+    if (this.matDetail) gl.deleteTexture(this.matDetail);
+    this.matSize = size;
+    const ext = gl.getExtension('EXT_texture_filter_anisotropic');
+    const maxAniso = ext ? gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT) as number : 1;
+    const matTex = (format: number) => {
+      const t = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, t);
+      gl.texStorage3D(gl.TEXTURE_2D_ARRAY, matMips(size), format, size, size, MAT_LAYERS);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      if (ext) gl.texParameterf(gl.TEXTURE_2D_ARRAY, ext.TEXTURE_MAX_ANISOTROPY_EXT, Math.max(1, Math.min(maxAniso, anisotropy)));
+      return t;
+    };
+    this.matSurface = matTex(gl.SRGB8_ALPHA8);
+    this.matDetail = matTex(gl.RGBA8);
+    const flat = flatMaterial(size);
+    for (let layer = 0; layer < MAT_LAYERS; layer++) this.uploadLayer(layer, flat);
+  }
+
   private uploadLayer(layer: number, data: Uint8Array): void {
     const gl = this.gl;
+    const size = this.matSize;
     for (const [map, tex] of [[0, this.matSurface], [1, this.matDetail]] as const) {
       gl.bindTexture(gl.TEXTURE_2D_ARRAY, tex);
-      for (let level = 0; level < MAT_MIPS; level++) {
-        const s = MAT_SIZE >> level;
-        const off = matOffset(map, level);
+      for (let level = 0; level < matMips(size); level++) {
+        const s = size >> level;
+        const off = matOffset(map, level, size);
         gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, level, 0, 0, layer, s, s, 1, gl.RGBA, gl.UNSIGNED_BYTE, data.subarray(off, off + s * s * 4));
       }
     }
   }
 
   setMaterial(layer: number, data: Uint8Array, tile: number): void {
-    if (layer < 0 || layer >= MAT_LAYERS || data.length < matOffset(1, 0) * 2) return;
+    if (layer < 0 || layer >= MAT_LAYERS || data.length !== matBytes(this.matSize)) return;
     this.uploadLayer(layer, data);
     this.tiles[layer] = tile;
   }

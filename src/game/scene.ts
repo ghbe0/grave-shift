@@ -128,6 +128,12 @@ export class Scene {
   private muzzle = 0;
   private barrAxis: boolean[];
   private staticLights: LightSrc[] = [];
+  /** Per-frame batches, reused so a 360 fps loop does not churn the garbage collector. */
+  private casters = new Batch();
+  private round = new Batch();
+  private glows = new Batch();
+  private vm = new Batch();
+  private groups = new Map<string, { mesh: number; shadow: boolean; batch: Batch }>();
   /** Red screen-edge flash, 0..1. */
   hurt = 0;
 
@@ -397,10 +403,9 @@ export class Scene {
     const hdr = s.snap?.hdr;
     const me = s.local();
     const power = !!hdr?.[H.power];
-    const casters = new Batch();
-    const round = new Batch();
-    const glows = new Batch();
-    const groups = new Map<string, { mesh: number; shadow: boolean; batch: Batch }>();
+    const { casters, round, glows, groups } = this;
+    casters.n = round.n = glows.n = this.vm.n = 0;
+    for (const g of groups.values()) g.batch.n = 0;
     const lights: LightSrc[] = [];
     const tmp = mat4();
 
@@ -537,7 +542,7 @@ export class Scene {
 
     // First-person weapon and arms: sway lags the look, bob follows the stride, kick decays after each shot.
     const alive = me[P.life] === 0;
-    const vm = new Batch();
+    const vm = this.vm;
     if (alive && gunId >= 0) {
       const dyaw = view.yaw - this.lastAngles[0], dpitch = view.pitch - this.lastAngles[1];
       this.sway[0] += (Math.max(-0.06, Math.min(0.06, dyaw * 0.6)) - this.sway[0]) * Math.min(1, dt * 10);
