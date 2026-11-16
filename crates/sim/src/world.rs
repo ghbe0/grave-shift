@@ -73,6 +73,7 @@ impl World {
                 if dd == 0.0 {
                     continue;
                 }
+                let start = if axis == 0 { pos.x } else { pos.z };
                 if axis == 0 { pos.x += dd } else { pos.z += dd }
                 if !self.overlaps(&Aabb::feet(*pos, r, h)) {
                     continue;
@@ -90,12 +91,21 @@ impl World {
                         }
                     }
                 }
+                // Push back out along this axis, but never behind where this step started: an overlap
+                // this step did not cause (being wedged, or skimming the top edge of a box) must not
+                // chain push-outs through the walls behind and out of the map.
                 for _ in 0..8 {
                     let Some(s) = self.first(&Aabb::feet(*pos, r, h)) else { break };
-                    if axis == 0 {
-                        pos.x = if dd > 0.0 { s.bb.min.x - r - EPS } else { s.bb.max.x + r + EPS };
+                    let target = if axis == 0 {
+                        if dd > 0.0 { (s.bb.min.x - r - EPS).max(start) } else { (s.bb.max.x + r + EPS).min(start) }
+                    } else if dd > 0.0 {
+                        (s.bb.min.z - r - EPS).max(start)
                     } else {
-                        pos.z = if dd > 0.0 { s.bb.min.z - r - EPS } else { s.bb.max.z + r + EPS };
+                        (s.bb.max.z + r + EPS).min(start)
+                    };
+                    if axis == 0 { pos.x = target } else { pos.z = target }
+                    if target == start {
+                        break;
                     }
                 }
                 if axis == 0 {
@@ -106,20 +116,26 @@ impl World {
                     vel.z = 0.0;
                 }
             }
+            let start = pos.y;
             pos.y += d.y;
+            // Same rule vertically: landing can only lift you back to where this step started, so
+            // brushing a tall wall while falling never teleports you onto its top.
             for _ in 0..8 {
                 let Some(s) = self.first(&Aabb::feet(*pos, r, h)) else { break };
+                let target = if d.y <= 0.0 { s.bb.max.y.min(start) } else { (s.bb.min.y - h - EPS).max(start) };
                 if d.y <= 0.0 {
-                    pos.y = s.bb.max.y;
                     if !c.grounded {
                         c.impact = c.impact.max(-vel.y);
                     }
                     c.grounded = true;
                 } else {
-                    pos.y = s.bb.min.y - h - EPS;
                     c.ceiling = true;
                 }
+                pos.y = target;
                 vel.y = 0.0;
+                if target == start {
+                    break;
+                }
             }
         }
         c

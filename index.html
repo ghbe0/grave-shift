@@ -61,8 +61,13 @@
     </section>
 
     <section id="screen-lobby" class="screen" hidden>
-      <h2>Party <span id="lobby-code"></span></h2>
-      <div class="row"><input id="lobby-link" readonly><button id="btn-copy">Copy invite link</button></div>
+      <h2>Party</h2>
+      <div class="code-box">
+        <div><span class="hint">Party code</span><div id="lobby-code" class="code"></div></div>
+        <button id="btn-copy-code">Copy code</button>
+      </div>
+      <p class="hint">Friends type this code into the party code box on the main menu and press Join, or just open the invite link.</p>
+      <div class="row"><input id="lobby-link" readonly aria-label="Invite link"><button id="btn-copy">Copy invite link</button></div>
       <ul id="lobby-players"></ul>
       <div class="row">
         <label>Mode <select id="lobby-mode"></select></label>
@@ -87,16 +92,19 @@
 
     <section id="screen-settings" class="screen" hidden>
       <h2>Settings</h2>
-      <label>Mouse sensitivity <input id="set-sens" type="range" min="0.2" max="3" step="0.05"></label>
-      <label>Field of view <input id="set-fov" type="range" min="70" max="110" step="1"></label>
-      <label>Volume <input id="set-volume" type="range" min="0" max="1" step="0.05"></label>
-      <label><input id="set-blur" type="checkbox"> Motion blur</label>
-      <label><input id="set-dof" type="checkbox"> Depth of field</label>
+      <h3>Video</h3>
+      <label>Frame rate <select id="set-fps"></select></label>
+      <p id="display-hz" class="hint"></p>
       <label>Texture quality <select id="set-tex"></select></label>
       <p id="tex-status" class="hint"></p>
-      <label>Frame rate limit <select id="set-fps"></select></label>
-      <p id="display-hz" class="hint"></p>
+      <label>Field of view <input id="set-fov" type="range" min="70" max="110" step="1"></label>
+      <label><input id="set-blur" type="checkbox"> Motion blur</label>
+      <label><input id="set-dof" type="checkbox"> Depth of field</label>
       <label><input id="set-showfps" type="checkbox"> Show FPS counter</label>
+      <h3>Controls</h3>
+      <label>Mouse sensitivity <input id="set-sens" type="range" min="0.2" max="3" step="0.05"></label>
+      <h3>Audio</h3>
+      <label>Volume <input id="set-volume" type="range" min="0" max="1" step="0.05"></label>
       <div class="row"><button id="btn-settings-done" class="primary">Done</button></div>
     </section>
 

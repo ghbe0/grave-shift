@@ -94,6 +94,7 @@ export class Session {
     if (!(n > 0) || n + 1 > frame.length) return;
     const { P, V, H } = this.sim.L;
     const snap = decodeSnap(this.sim.L, frame.slice(1, 1 + n));
+    if (!snap) return;
     if (this.buffer.push(snap, this.now())) {
       this.snap = snap;
       this.game.setDoors(snap.hdr[H.doors]);
@@ -179,7 +180,7 @@ export class Session {
       this.game.step(TICK);
       this.drainLocal(true);
       const raw = this.game.snapshot();
-      this.snap = decodeSnap(this.sim.L, raw);
+      this.snap = decodeSnap(this.sim.L, raw) ?? this.snap;
       if (this.host && ++this.tickCount % SNAP_EVERY === 0) {
         const frame = new Float32Array(1 + raw.length + this.outEvents.length);
         frame[0] = raw.length;

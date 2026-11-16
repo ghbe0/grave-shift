@@ -197,13 +197,24 @@ export interface Snap {
   barrs: Float32Array;
 }
 
-export function decodeSnap(L: Layout, raw: Float32Array): Snap {
+/**
+ * Splits a snapshot into its parts. Snapshots arrive from another player's machine, so the counts
+ * in the header are checked against the data actually received: a malformed or hostile one (say,
+ * claiming a billion zombies) is rejected with null instead of locking up this client.
+ */
+export function decodeSnap(L: Layout, raw: Float32Array): Snap | null {
+  if (raw.length < L.H._len) return null;
   const hdr = raw.subarray(0, L.H._len);
+  const count = (v: number, max: number) => (Number.isInteger(v) && v >= 0 && v <= max ? v : -1);
+  const nP = count(hdr[L.H.n_players], 64), nZ = count(hdr[L.H.n_zombies], 1024);
+  const nE = count(hdr[L.H.n_ents], 4096), nB = count(hdr[L.H.n_barrs], 256);
+  if (nP < 0 || nZ < 0 || nE < 0 || nB < 0) return null;
+  if (L.H._len + nP * L.P._len + nZ * L.Z._len + nE * L.E._len + nB > raw.length) return null;
   let o = L.H._len;
   const cut = (n: number, stride: number) => { const out: Float32Array[] = []; for (let i = 0; i < n; i++, o += stride) out.push(raw.subarray(o, o + stride)); return out; };
-  const players = cut(hdr[L.H.n_players], L.P._len);
-  const zombies = cut(hdr[L.H.n_zombies], L.Z._len);
-  const ents = cut(hdr[L.H.n_ents], L.E._len);
-  const barrs = raw.subarray(o, o + hdr[L.H.n_barrs]);
+  const players = cut(nP, L.P._len);
+  const zombies = cut(nZ, L.Z._len);
+  const ents = cut(nE, L.E._len);
+  const barrs = raw.subarray(o, o + nB);
   return { raw, time: hdr[L.H.time], hdr, players, zombies, ents, barrs };
 }

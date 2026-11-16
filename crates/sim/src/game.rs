@@ -276,6 +276,45 @@ enum Target {
     Relay(usize),
 }
 
+impl Player {
+    /// Clamps every field that is used as an index or a state selector into its valid range.
+    pub fn sanitize(&mut self) {
+        let a = &mut self.arms;
+        a.cur = a.cur.min(2);
+        a.next = a.next.min(2);
+        for g in a.guns.iter_mut() {
+            if weapon(g.id).is_none() {
+                *g = Gun::NONE;
+            }
+            g.modi = g.modi.min(MODS.len() as u8 - 1);
+            g.tier = g.tier.min(1);
+        }
+        if a.guns[a.cur as usize].id < 0 {
+            a.cur = a.guns.iter().position(|g| g.id >= 0).unwrap_or(0) as u8;
+            a.next = a.cur;
+        }
+        if !(-1..TONICS.len() as i32).contains(&self.tonic) {
+            self.tonic = -1;
+        }
+        if !(-1..ABILITIES.len() as i32).contains(&self.ability) {
+            self.ability = -1;
+        }
+        self.life = self.life.min(DEAD);
+        self.charge = self.charge.clamp(0.0, 1.0);
+        self.max_health = self.max_health.clamp(1.0, 1000.0);
+        self.health = self.health.clamp(0.0, self.max_health);
+        let c = &mut self.ctl;
+        c.mode = c.mode.min(MODE_MANTLE);
+        // Keep positions inside a sane range so later maths stays finite.
+        for v in [&mut c.pos.x, &mut c.pos.y, &mut c.pos.z] {
+            *v = v.clamp(-1e4, 1e4);
+        }
+        for v in [&mut c.vel.x, &mut c.vel.y, &mut c.vel.z] {
+            *v = v.clamp(-200.0, 200.0);
+        }
+    }
+}
+
 impl Game {
     pub fn new(map: usize, mode: u8, seed: u32, authority: bool) -> Game {
         let mut g = Game {
@@ -320,6 +359,9 @@ impl Game {
         for d in 0..self.map.def.doors.len() {
             self.map.world.set_door(d as i32, mask & (1 << d) != 0);
         }
+    }
+    pub fn def_name(&self) -> &'static str {
+        self.map.def.name
     }
     pub fn solo(&self) -> bool {
         self.slots.len() <= 1
@@ -913,6 +955,17 @@ impl Game {
     }
 
     fn tick_player(&mut self, i: usize, dt: f32) {
+        // Safety net: anyone who somehow ends up outside the map (a collision bug, a glitch) is put
+        // back at a spawn point instead of falling forever or hiding where zombies cannot reach.
+        let (w, d) = self.map.size;
+        let pos = self.slots[i].p.ctl.pos;
+        if self.slots[i].p.life != DEAD && (pos.x < 0.0 || pos.z < 0.0 || pos.x > w || pos.z > d || pos.y < -2.0 || pos.y > WALL_H) {
+            let back = self.map.spawns.iter().copied().min_by(|a, b| a.dist(pos).total_cmp(&b.dist(pos))).unwrap_or(pos);
+            let c = &mut self.slots[i].p.ctl;
+            c.pos = back;
+            c.vel = V3::ZERO;
+            c.mode = MODE_NORMAL;
+        }
         let mode = self.mode;
         let s = &mut self.slots[i];
         s.bank = (s.bank + dt).min(0.5);
@@ -1141,12 +1194,19 @@ impl Game {
         }
     }
     /// Overwrites a player with host state (client reconciliation). Creates the player if needed.
+    ///
+    /// The data comes from another player's machine, so it is treated as untrusted: non-finite
+    /// numbers become 0 and every value used as an index is clamped to a valid range, so a
+    /// malformed or hostile snapshot cannot crash this client.
     pub fn set_player_state(&mut self, d: &[f32]) {
+        let clean: Vec<f32> = d.iter().map(|v| if v.is_finite() { *v } else { 0.0 }).collect();
         let mut p = Player::default();
-        p.get(&mut Rd::new(d));
+        p.get(&mut Rd::new(&clean));
+        p.sanitize();
         match self.idx(p.id) {
             Some(i) => self.slots[i].p = p,
-            None => self.slots.push(Slot { p, loadout: default_loadout(), bank: 0.0, mod_cd: 0.0, tonic_buys: 0, rebuilt: 0 }),
+            None if self.slots.len() < 16 => self.slots.push(Slot { p, loadout: default_loadout(), bank: 0.0, mod_cd: 0.0, tonic_buys: 0, rebuilt: 0 }),
+            None => {}
         }
     }
 }
@@ -1173,6 +1233,7 @@ pub fn layout() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::Rng;
 
     fn cmd(seq: u32, yaw: f32, pitch: f32, buttons: u32, rt: f32) -> [f32; CMD_LEN] {
         [seq as f32, 1.0 / 60.0, 0.0, 0.0, yaw, pitch, buttons as f32, -1.0, rt]
@@ -1303,9 +1364,85 @@ mod tests {
         assert!(a.arms.gun().ammo < 30.0);
     }
 
+    /// Values a hostile or buggy peer might send: NaN, infinities, huge, negative, fractional.
+    fn junk(r: &mut Rng) -> f32 {
+        match r.range(10) {
+            0 => f32::NAN,
+            1 => f32::INFINITY,
+            2 => f32::NEG_INFINITY,
+            3 => 1e30,
+            4 => -1e30,
+            5 => (r.f() - 0.5) * 4.0e9,
+            6 => r.range(70000) as f32 - 1000.0,
+            _ => (r.f() - 0.5) * 20.0,
+        }
+    }
+
+    #[test]
+    fn host_survives_garbage_from_guests() {
+        let mut r = Rng::new(99);
+        for map in 0..crate::maps::MAPS.len() {
+            for mode in [MODE_SURVIVAL, MODE_SKIRMISH] {
+                let mut g = Game::new(map, mode, 7, true);
+                g.local = 0;
+                g.add_player(0, 0, default_loadout());
+                for id in 1..4 {
+                    let l: Vec<f32> = (0..40).map(|_| junk(&mut r)).collect();
+                    g.add_player(id, id, crate::loadout::from_floats(&l));
+                }
+                for tick in 0..3000u32 {
+                    for id in 1..4 {
+                        let n = r.range(14);
+                        let c: Vec<f32> = (0..n).map(|_| junk(&mut r)).collect();
+                        g.cmd(id, &c);
+                    }
+                    // An honest player keeps playing.
+                    g.cmd(0, &cmd(tick, tick as f32 * 0.01, 0.0, B_FIRE | if tick % 40 == 0 { B_RELOAD } else { 0 }, g.time));
+                    g.step(1.0 / 60.0);
+                    if tick % 500 == 0 {
+                        g.remove_player(3);
+                        let l: Vec<f32> = (0..27).map(|_| junk(&mut r)).collect();
+                        g.add_player(3, 3, crate::loadout::from_floats(&l));
+                    }
+                    if tick % 60 == 0 {
+                        let mut snap = vec![];
+                        g.snapshot(&mut snap);
+                        assert!(snap.iter().all(|v| v.is_finite()), "snapshot has non-finite values (map {map}, mode {mode}, tick {tick})");
+                    }
+                }
+                for s in &g.slots {
+                    let p = s.p.ctl.pos;
+                    assert!(p.x.is_finite() && p.y.is_finite() && p.z.is_finite());
+                    assert!(p.x > -5.0 && p.z > -5.0 && p.x < g.map.size.0 + 5.0 && p.z < g.map.size.1 + 5.0, "player {} left the map: {p:?}", s.p.id);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn client_survives_garbage_snapshots_from_a_host() {
+        let mut r = Rng::new(7);
+        let mut g = Game::new(0, MODE_SURVIVAL, 1, false);
+        g.local = 5;
+        for tick in 0..4000u32 {
+            let n = r.range(200);
+            let mut d: Vec<f32> = (0..n).map(|_| junk(&mut r)).collect();
+            if !d.is_empty() {
+                d[0] = 5.0; // our own id, so it is applied to the predicted player
+            }
+            g.set_player_state(&d);
+            let c: Vec<f32> = (0..CMD_LEN).map(|_| junk(&mut r)).collect();
+            g.cmd(5, &c);
+            g.cmd(5, &cmd(tick, 0.3, 0.0, B_FIRE | B_SPRINT | B_JUMP | B_TONIC | B_ABILITY, 0.0));
+            g.set_doors(r.next());
+        }
+        assert!(g.slots.len() <= 16, "a host cannot make a client allocate players without bound");
+    }
+
     #[test]
     fn layout_lists_fields() {
         let l = layout();
         assert!(l.contains("P|id:0,ack:1,life:2,health:3,") && l.contains("ctl.pos:11,ctl.vel:14,") && l.contains("H|time:0,"), "{l}");
     }
 }
+

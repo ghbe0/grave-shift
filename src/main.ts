@@ -6,7 +6,7 @@ import { Input } from './engine/input';
 import { Ticker } from './engine/ticker';
 import { Scene } from './game/scene';
 import { Session } from './game/session';
-import { FPS_LIMITS, FrameLimiter, FrameMeter } from './engine/pacing';
+import { frameRateOptions, FrameLimiter, FrameMeter, isFpsLimit } from './engine/pacing';
 import { streamMaterials, type MaterialStream } from './gfx/materials';
 import { createRenderer, TEXTURE_QUALITY, type Renderer, type TextureQuality } from './gfx/renderer';
 import { clientToken, GuestLobby, HostLobby, MODES, type KickReason, type LobbyState, type StartMsg } from './netcode/lobby';
@@ -32,8 +32,12 @@ function loadSettings(): Settings {
   let s: Settings;
   try { s = { ...DEFAULTS, ...JSON.parse(localStorage.getItem('gs.settings') ?? '{}') }; } catch { s = { ...DEFAULTS }; }
   if (!(s.textures in TEXTURE_QUALITY)) s.textures = DEFAULTS.textures;
-  if (!(FPS_LIMITS as readonly number[]).includes(s.fpsLimit)) s.fpsLimit = 0;
+  if (!isFpsLimit(s.fpsLimit)) s.fpsLimit = 0;
   return s;
+}
+/** The refresh rate measured on a previous visit, so the menu is right before measuring again. */
+function storedHz(): number {
+  try { const hz = Number(localStorage.getItem('gs.displayHz')); return hz > 0 && hz < 1000 ? hz : 0; } catch { return 0; }
 }
 function saveSettings(s: Settings): void { try { localStorage.setItem('gs.settings', JSON.stringify(s)); } catch { /* ignore */ } }
 
@@ -69,8 +73,9 @@ class App {
   private materialStream: MaterialStream | null = null;
   private rendererName = '';
   private limiter = new FrameLimiter();
-  /** Exposed for the settings screen and automated tests. */
-  meter = new FrameMeter();
+  /** Exposed for the settings screen and automated tests. Seeded with the rate measured last visit. */
+  meter = new FrameMeter(storedHz());
+  private shownHz = -1;
   private lastHud = 0;
 
   async init(): Promise<void> {
@@ -113,7 +118,8 @@ class App {
     this.materialStream?.cancel();
     if (reallocate) this.renderer.setMaterialQuality(tex.size, tex.anisotropy);
     const status = (text: string) => {
-      $('renderer-info').textContent = `Renderer: ${this.rendererName} · ${text}`;
+      this.texText = text;
+      this.showRendererInfo();
       $('tex-status').textContent = text;
     };
     status(`generating ${tex.label.toLowerCase()} textures...`);
@@ -121,6 +127,12 @@ class App {
       status(done < total ? `generating ${tex.label.toLowerCase()} textures ${done}/${total}` : `${tex.label} textures (${tex.size} px, ${tex.anisotropy}x filtering)`);
     });
     this.materials = this.materialStream.done;
+  }
+
+  private texText = '';
+  private showRendererInfo(): void {
+    const hz = this.meter.displayHz;
+    $('renderer-info').textContent = [`Renderer: ${this.rendererName}`, hz ? `${hz} Hz display` : '', this.texText].filter(Boolean).join(' · ');
   }
 
   private name(): string { return $<HTMLInputElement>('name').value.trim(); }
@@ -170,6 +182,11 @@ class App {
       void navigator.clipboard?.writeText(input.value).then(() => ($('btn-copy').textContent = 'Copied!'), () => input.select());
       setTimeout(() => ($('btn-copy').textContent = 'Copy invite link'), 1500);
     });
+    click('btn-copy-code', () => {
+      const code = $('lobby-code').textContent ?? '';
+      void navigator.clipboard?.writeText(code).then(() => ($('btn-copy-code').textContent = 'Copied!'), () => {});
+      setTimeout(() => ($('btn-copy-code').textContent = 'Copy code'), 1500);
+    });
     click('btn-start', () => this.startParty());
     click('btn-ready', () => {
       const me = this.lobby?.players.find(p => p.id === this.guest?.selfId);
@@ -204,8 +221,9 @@ class App {
       this.applyTextures(true);
     };
     const fpsSel = $<HTMLSelectElement>('set-fps');
-    for (const n of FPS_LIMITS) fpsSel.add(new Option(n ? `${n} fps` : 'Match display (unlimited)', String(n)));
-    fpsSel.value = String(s.fpsLimit);
+    this.updateDisplayHz(true);
+    // The refresh rate can change (the window moved to another monitor): keep the menu in step.
+    setInterval(() => this.updateDisplayHz(false), 1000);
     fpsSel.onchange = () => {
       s.fpsLimit = +fpsSel.value;
       this.limiter.limit = s.fpsLimit;
@@ -221,11 +239,25 @@ class App {
   private openSettings(back: string): void {
     this.back = back;
     this.show('settings');
-    // Report the measured refresh rate so players know what "Match display" means on their screen.
+    this.updateDisplayHz(true);
+  }
+
+  /**
+   * Rebuilds the frame rate menu around the measured refresh rate: the default draws every
+   * refresh (shown as that rate), and only caps the display can actually show are offered.
+   */
+  private updateDisplayHz(force: boolean): void {
     const hz = this.meter.displayHz;
+    if (!force && hz === this.shownHz) return;
+    this.shownHz = hz;
+    if (hz) try { localStorage.setItem('gs.displayHz', String(hz)); } catch { /* storage may be blocked */ }
+    const sel = $<HTMLSelectElement>('set-fps');
+    sel.replaceChildren(...frameRateOptions(hz, this.settings.fpsLimit).map(o => new Option(o.label, String(o.value))));
+    sel.value = String(this.settings.fpsLimit);
     $('display-hz').textContent = hz
-      ? `Your display refreshes at about ${hz} Hz. Browsers draw in step with the display, so the game runs at up to ${hz} fps; a 360 Hz monitor gets 360 fps.`
-      : 'Browsers draw in step with the display, so the game runs at up to your monitor\'s refresh rate (360 fps on a 360 Hz monitor).';
+      ? `Detected a ${hz} Hz display, so the game draws up to ${hz} frames a second. Browsers can't draw faster than the monitor refreshes; a 360 Hz monitor gets 360 fps.`
+      : 'Measuring your display\'s refresh rate...';
+    this.showRendererInfo();
   }
 
   // ---- Party flow ----
@@ -307,6 +339,8 @@ class App {
   // ---- Match ----
 
   private begin(start: StartMsg, selfId: number): void {
+    // The map index may come from another player's machine: keep it within the maps we have.
+    start = { ...start, map: Math.min(Math.max(0, start.map | 0), this.sim.catalog.maps.length - 1) };
     this.session?.dispose();
     const session = new Session(this.sim, start, selfId, this.host, this.guest);
     this.session = session;
@@ -395,9 +429,10 @@ class App {
 
   private frame(now: number): void {
     requestAnimationFrame(t => this.frame(t));
-    this.meter.refresh(now);
     const s = this.session;
-    if (!s || !this.scene) { this.last = now; return; }
+    // Measure the display only while nothing 3D is drawn: in a match the gap between callbacks
+    // is the render time, which would make a 144 Hz monitor look like a 60 Hz one on a slow GPU.
+    if (!s || !this.scene) { this.meter.refresh(now); this.last = now; return; }
     if (!this.limiter.shouldRender(now)) return;
     const dt = Math.min((now - this.last) / 1000, 0.1);
     this.last = now;

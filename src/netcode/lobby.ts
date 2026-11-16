@@ -15,9 +15,46 @@ export interface LobbyState { code: string; players: LobbyPlayer[]; map: number;
 export interface StartMsg { t: 'start'; map: number; mode: number; seed: number; players: { id: number; team: number; loadout: number[] }[] }
 export type KickReason = 'kicked' | 'banned' | 'full' | 'version' | 'host-left';
 
-interface Member { id: number; name: string; token: string; ready: boolean; loadout: number[]; link: Link | null }
+interface Member { id: number; name: string; token: string; ready: boolean; loadout: number[]; link: Link | null; budget: number; refilled: number; strikes: number }
 
 const cleanName = (n: unknown) => (typeof n === 'string' ? n.replace(/[^\p{L}\p{N} _.-]/gu, '').trim().slice(0, 16) : '') || 'Player';
+const int = (v: unknown, lo: number, hi: number, fallback = lo) => (Number.isInteger(v) && (v as number) >= lo && (v as number) <= hi ? (v as number) : fallback);
+const KICK_REASONS: KickReason[] = ['kicked', 'banned', 'full', 'version', 'host-left'];
+
+/**
+ * Lobby state and match starts come from the host's machine. Guests rebuild them field by field
+ * with known types and ranges, so a modified or hostile host cannot inject markup, out-of-range
+ * indices or oversized lists into this client.
+ */
+export function cleanLobbyState(raw: any): LobbyState | null {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.players)) return null;
+  return {
+    code: typeof raw.code === 'string' ? raw.code.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6) : '',
+    players: raw.players.slice(0, 16).map((p: any) => ({ id: int(p?.id, 0, 1e6), name: cleanName(p?.name), host: p?.host === true, ready: p?.ready === true })),
+    map: int(raw.map, 0, 63),
+    mode: int(raw.mode, 0, MODES.length - 1),
+    inMatch: raw.inMatch === true,
+  };
+}
+export function cleanStart(raw: any): StartMsg {
+  const players = Array.isArray(raw?.players) ? raw.players.slice(0, 16) : [];
+  return {
+    t: 'start',
+    map: int(raw?.map, 0, 63),
+    mode: int(raw?.mode, 0, MODES.length - 1),
+    seed: int(raw?.seed, -(2 ** 31), 2 ** 31 - 1, 1),
+    players: players.map((p: any) => ({
+      id: int(p?.id, 0, 1e6),
+      team: int(p?.team, 0, 1e6),
+      loadout: Array.isArray(p?.loadout) ? p.loadout.slice(0, 32).map((v: unknown) => int(v, -1, 1000, -1)) : [],
+    })),
+  };
+}
+
+/** Lobby messages a guest may send per second on average, and in a burst. Flooding gets you kicked. */
+const MSG_RATE = 5;
+const MSG_BURST = 20;
+const MSG_STRIKES = 60;
 
 export class HostLobby {
   onChange: (state: LobbyState) => void = () => {};
@@ -37,7 +74,7 @@ export class HostLobby {
   private inMatch = false;
 
   private constructor(readonly code: string, private endpoint: HostEndpoint, name: string, loadout: number[], private mapCount: number) {
-    this.members.set(0, { id: 0, name: cleanName(name), token: '', ready: true, loadout, link: null });
+    this.members.set(0, { id: 0, name: cleanName(name), token: '', ready: true, loadout, link: null, budget: MSG_BURST, refilled: 0, strikes: 0 });
     endpoint.onLink = link => this.accept(link);
   }
 
@@ -75,13 +112,22 @@ export class HostLobby {
         const token = String(msg.token ?? '').slice(0, 64);
         if (this.banned.has(token)) return reject('banned');
         if (this.members.size >= this.maxPlayers) return reject('full');
-        member = { id: this.nextId++, name: this.uniqueName(cleanName(msg.name)), token, ready: false, loadout: this.loadoutOf(msg.loadout), link };
+        member = { id: this.nextId++, name: this.uniqueName(cleanName(msg.name)), token, ready: false, loadout: this.loadoutOf(msg.loadout), link, budget: MSG_BURST, refilled: performance.now(), strikes: 0 };
         this.members.set(member.id, member);
         link.sendCtl({ t: 'welcome', id: member.id, lobby: this.state });
         if (this.inMatch) this.onLateJoin(member.id, member.loadout);
         this.sync();
         return;
       }
+      // Token bucket: a few messages a second is plenty for a lobby; floods are dropped, then kicked.
+      const now = performance.now();
+      member.budget = Math.min(MSG_BURST, member.budget + ((now - member.refilled) / 1000) * MSG_RATE);
+      member.refilled = now;
+      if (member.budget < 1) {
+        if (++member.strikes > MSG_STRIKES) this.remove(member.id, 'kicked');
+        return;
+      }
+      member.budget -= 1;
       if (msg.t === 'ready') member.ready = !!msg.ready;
       else if (msg.t === 'loadout') member.loadout = this.loadoutOf(msg.loadout);
       else return;
@@ -190,11 +236,24 @@ export class GuestLobby {
       link.onCtl = msg => {
         if (!msg || typeof msg !== 'object') return;
         switch (msg.t) {
-          case 'welcome': lobby.selfId = msg.id; lobby.state = msg.lobby; clearTimeout(timer); resolve(lobby); break;
-          case 'lobby': lobby.state = msg.lobby; lobby.onChange(msg.lobby); break;
-          case 'start': lobby.onStart(msg); break;
+          case 'welcome': {
+            const state = cleanLobbyState(msg.lobby);
+            const id = int(msg.id, 0, 1e6, -1);
+            if (!state || id < 0 || lobby.selfId >= 0) return;
+            lobby.selfId = id;
+            lobby.state = state;
+            clearTimeout(timer);
+            resolve(lobby);
+            break;
+          }
+          case 'lobby': {
+            const state = cleanLobbyState(msg.lobby);
+            if (state && lobby.selfId >= 0) { lobby.state = state; lobby.onChange(state); }
+            break;
+          }
+          case 'start': if (lobby.selfId >= 0) lobby.onStart(cleanStart(msg)); break;
           case 'end': lobby.onEnd(); break;
-          case 'kick': leave(msg.reason); link.close(); break;
+          case 'kick': leave(KICK_REASONS.includes(msg.reason) ? msg.reason : 'kicked'); link.close(); break;
         }
       };
       link.onRt = data => lobby.onFrame(data);

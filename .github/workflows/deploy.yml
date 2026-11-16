@@ -118,6 +118,8 @@ jobs:
     permissions:
       pages: write
       id-token: write
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -135,3 +137,51 @@ jobs:
 
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  # After publishing, wait until GitHub Pages serves this exact build, then play the public site:
+  # it must load with no errors or missing files, and two browsers must form a party over WebRTC.
+  verify-live:
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx playwright install --with-deps chromium
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: site
+          path: dist
+
+      - name: Wait for the new build to be live
+        env:
+          URL: ${{ needs.deploy.outputs.page_url }}
+        run: |
+          entry=$(grep -o 'assets/index-[A-Za-z0-9_-]*\.js' dist/index.html | head -1)
+          for i in $(seq 1 60); do
+            if curl -fsS "$URL" | grep -q "$entry"; then echo "$URL is serving $entry"; exit 0; fi
+            sleep 5
+          done
+          echo "::error::$URL never started serving $entry"
+          exit 1
+
+      - name: Play the live site
+        env:
+          URL: ${{ needs.deploy.outputs.page_url }}
+          E2E_ONLY: site loads|WebRTC
+        run: node tests/e2e/smoke.mjs "$URL"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-live-results
+          path: e2e-results
+          retention-days: 7

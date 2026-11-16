@@ -16,7 +16,7 @@ const results = [];
 let opened = [];
 const only = process.env.E2E_ONLY;
 const check = async (name, fn) => {
-  if (only && !name.includes(only)) return;
+  if (only && !only.split('|').some(o => name.includes(o))) return;
   const t0 = Date.now();
   try {
     const detail = await fn();
@@ -148,9 +148,16 @@ await check('settings: texture quality, frame rate cap and FPS counter', async (
   await page.evaluate(() => window.app.materials);
   await page.click('#btn-settings');
   const texOptions = await page.$$eval('#set-tex option', o => o.map(x => x.value));
-  const fpsOptions = await page.$$eval('#set-fps option', o => o.map(x => +x.value));
   if (texOptions.join() !== 'low,medium,high,ultra') throw new Error(`texture options ${texOptions}`);
-  if (!fpsOptions.includes(360) || !fpsOptions.includes(0)) throw new Error(`fps options ${fpsOptions}`);
+  // The frame rate menu is built around the refresh rate measured on the menus: the default (0)
+  // is labelled with it, and only caps below it are offered.
+  const hz = await page.evaluate(() => window.app.meter.displayHz);
+  const fpsOptions = await page.$$eval('#set-fps option', o => o.map(x => ({ value: +x.value, label: x.textContent })));
+  if (!hz) throw new Error('display refresh rate was not detected on the menu');
+  if (fpsOptions[0].value !== 0 || !fpsOptions[0].label.includes(`${hz} Hz`)) throw new Error(`default option ${JSON.stringify(fpsOptions[0])}`);
+  if (fpsOptions.slice(1).some(o => o.value >= hz)) throw new Error(`offers caps the ${hz} Hz display cannot show: ${fpsOptions.map(o => o.value)}`);
+  if (await page.inputValue('#set-fps') !== '0') throw new Error('frame rate does not default to the display rate');
+  if (await page.evaluate(() => localStorage.getItem('gs.displayHz')) !== String(hz)) throw new Error('detected rate not remembered');
   // Low textures: the GPU arrays are rebuilt at 128 px and every layer is regenerated at that size.
   await page.selectOption('#set-tex', 'low');
   await page.waitForFunction(() => /Low textures/.test(document.getElementById('tex-status').textContent), null, { timeout: 60000 });
@@ -172,7 +179,7 @@ await check('settings: texture quality, frame rate cap and FPS counter', async (
   if (!/fps/.test(counter ?? '') || await page.isHidden('#fps')) throw new Error('FPS counter not shown');
   if (saved.textures !== 'low' || saved.fpsLimit !== 30 || saved.showFps !== true) throw new Error(`settings not saved: ${JSON.stringify(saved)}`);
   assertClean(page);
-  return { materialSize: size, fps: +fps.toFixed(1), counter, firstSample: +before.toFixed(1) };
+  return { displayHz: hz, fpsOptions: fpsOptions.map(o => o.value), materialSize: size, fps: +fps.toFixed(1), counter, firstSample: +before.toFixed(1) };
 });
 
 /**

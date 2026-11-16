@@ -37,7 +37,7 @@ describe('wasm core', () => {
     g.setLocal(0);
     g.addPlayer(0, 0, sim.defaultLoadout());
     for (let s = 0; s < 120; s++) { g.cmd(0, cmd(s, 1, Math.PI, Btn.sprint)); g.step(1 / 60); }
-    const snap = decodeSnap(sim.L, g.snapshot());
+    const snap = decodeSnap(sim.L, g.snapshot())!;
     const { P, H } = sim.L;
     expect(snap.players.length).toBe(1);
     expect(snap.players[0][P.health]).toBe(100);

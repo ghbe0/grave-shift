@@ -115,8 +115,8 @@ export class Hud {
 
     const perks = cat.perks.filter(k => p[P.perks] & (1 << k.id)).map(k => `<span class="chip" title="${k.desc}">${k.name}</span>`);
     if (p[P.shield] > 0) perks.push(`<span class="chip">Bulwark ×${p[P.shield]}</span>`);
-    if (p[P.tonic] >= 0) {
-      const tn = cat.tonics[p[P.tonic]];
+    const tn = cat.tonics[p[P.tonic]];
+    if (tn) {
       const left = tn.kind === 0 ? `${Math.ceil(p[P.tonic_left])}s` : tn.kind === 1 ? `${p[P.tonic_left]} rounds` : tn.kind === 3 ? `[Z] ×${p[P.tonic_left]}` : '';
       perks.push(`<span class="chip tonic">${tn.name} ${left}</span>`);
     }

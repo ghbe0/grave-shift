@@ -854,6 +854,7 @@ mod tests {
     use super::*;
     use crate::controller::{B_USE, CMD_LEN};
     use crate::loadout::default_loadout;
+    use crate::math::Aabb;
 
     #[test]
     fn health_follows_the_two_stage_curve() {
@@ -993,6 +994,54 @@ mod tests {
         g.cmd(0, &idle(4, B_USE));
         assert_eq!(g.sv.quest[0].0, 3);
         assert!(!g.relays_live());
+    }
+
+    /// Stands the player beside interactable `k` (on a side that is not inside geometry) and presses use.
+    fn use_at(g: &mut Game, k: usize, seq: &mut u32) {
+        let at = g.map.inter[k].pos;
+        let side = [(1.5, 0.0), (-1.5, 0.0), (0.0, 1.5), (0.0, -1.5)].into_iter().map(|(x, z)| v3(at.x + x, 0.0, at.z + z));
+        g.slots[0].p.ctl.pos = side.into_iter().find(|p| !g.map.world.overlaps(&Aabb::feet(*p, 0.35, 1.8))).unwrap();
+        g.cmd(0, &idle(*seq, 0));
+        g.cmd(0, &idle(*seq + 1, B_USE));
+        *seq += 2;
+    }
+
+    #[test]
+    fn tonic_dispenser_draws_from_the_pack_with_a_rising_price() {
+        use crate::controller::B_TONIC;
+        for map in 0..MAPS.len() {
+            let mut g = game(map);
+            g.slots[0].p.calm_t = 1e9;
+            g.slots[0].p.points = 10_000;
+            let k = g.map.inter.iter().position(|i| i.kind == I_TONIC).unwrap_or_else(|| panic!("{} has no tonic machine", g.def_name()));
+            let pack = &g.slots[0].loadout[L_TONIC..L_TONIC + 5].to_vec();
+            let mut seq = 0;
+            for (n, cost) in [500, 1000, 1500].into_iter().enumerate() {
+                let before = g.slots[0].p.points;
+                g.events.clear();
+                use_at(&mut g, k, &mut seq);
+                assert_eq!(before - g.slots[0].p.points, cost, "buy {n} costs {cost}");
+                let got = g.events.chunks(EV_STRIDE).find(|e| e[0] as u32 == EV_TONIC).map(|e| e[2] as i32).expect("tonic event");
+                assert!(pack.contains(&got), "drew {got}, not from the pack {pack:?}");
+            }
+            // Three a round, then the machine refuses until the next round.
+            let before = g.slots[0].p.points;
+            use_at(&mut g, k, &mut seq);
+            assert_eq!(g.slots[0].p.points, before);
+            assert_eq!(g.slots[0].p.prompt_cost, 0, "prompt not refreshed until the next tick");
+            g.step(1.0 / 60.0);
+            assert_eq!(g.slots[0].p.prompt_cost, -3, "limit reached");
+        }
+        // Activated tonics: Phase Step blinks you back to the start, twice.
+        let mut g = game(0);
+        g.slots[0].p.calm_t = 1e9;
+        let p = &mut g.slots[0].p;
+        (p.tonic, p.tonic_left, p.tonic_on) = (T_PHASE, 2.0, false);
+        p.ctl.pos = g.map.spawns[0] + v3(9.0, 0.0, 0.0);
+        g.cmd(0, &idle(100, 0));
+        g.cmd(0, &idle(101, B_TONIC));
+        assert!(g.slots[0].p.ctl.pos.dist(g.map.spawns[0]) < 0.5);
+        assert_eq!((g.slots[0].p.tonic, g.slots[0].p.tonic_left), (T_PHASE, 1.0));
     }
 
     #[test]

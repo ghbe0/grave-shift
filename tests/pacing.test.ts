@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FrameLimiter, FrameMeter } from '../src/engine/pacing';
+import { frameRateOptions, FrameLimiter, FrameMeter, isFpsLimit } from '../src/engine/pacing';
 
 /** Simulates a display calling back at `hz` for `secs`, returning how many frames were drawn. */
 function run(hz: number, limit: number, secs = 2, jitter = 0.2): number {
@@ -50,5 +50,40 @@ describe('frame meter', () => {
     const m = new FrameMeter();
     for (let i = 0; i < 100; i++) m.refresh(i * 6.97); // ~143.5 Hz
     expect(m.displayHz).toBe(144);
+  });
+});
+
+describe('frame rate options', () => {
+  it('default to the display rate and only offer caps below it', () => {
+    const opts = frameRateOptions(144);
+    expect(opts[0]).toEqual({ value: 0, label: '144 fps (matches your 144 Hz display)' });
+    expect(opts.map(o => o.value)).toEqual([0, 30, 60, 75, 90, 100, 120]);
+    expect(frameRateOptions(360).map(o => o.value)).toContain(300);
+    expect(frameRateOptions(360).map(o => o.value)).not.toContain(360);
+    expect(frameRateOptions(500).map(o => o.value)).toContain(480);
+  });
+  it('keep a saved cap that the current display cannot reach, marked as such', () => {
+    const opts = frameRateOptions(60, 240);
+    expect(opts.at(-1)).toEqual({ value: 240, label: '240 fps (above this 60 Hz display)' });
+  });
+  it('offer everything up to 360 while the rate is still being measured', () => {
+    const opts = frameRateOptions(0);
+    expect(opts[0].label).toMatch(/measuring/);
+    expect(opts.at(-1)!.value).toBe(360);
+  });
+  it('validate saved values', () => {
+    expect(isFpsLimit(0) && isFpsLimit(144) && isFpsLimit(360)).toBe(true);
+    expect(isFpsLimit(143) || isFpsLimit('60') || isFpsLimit(-1)).toBe(false);
+  });
+});
+
+describe('display detection', () => {
+  it('ignores stalls and uses the saved rate until enough samples arrive', () => {
+    const m = new FrameMeter(165);
+    expect(m.displayHz).toBe(165);
+    m.refresh(0);
+    m.refresh(5000); // hidden tab
+    for (let i = 1; i < 40; i++) m.refresh(5000 + i * (1000 / 240));
+    expect(m.displayHz).toBe(240);
   });
 });

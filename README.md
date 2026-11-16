@@ -19,6 +19,25 @@ shooting locally and interpolate everything else. The public PeerJS broker only 
 browsers to each other; game traffic then flows directly between them. If the host closes the
 tab, the party ends.
 
+### Is hosting safe?
+
+- **Nobody can take over your computer through the game.** It runs inside the browser's
+  sandbox, and the only things a guest can send are lobby messages (name, ready, loadout) and
+  control inputs. The host checks all of it: names are stripped to plain letters and numbers,
+  loadouts are validated, inputs are clamped, movement can't run faster than real time, and a
+  guest who floods the lobby with messages is kicked. Names are always displayed as text, so
+  nobody can inject code into another player's page. Guests equally reject malformed data from a
+  host, so a modified host can't crash their game.
+- **Guests can't cheat their stats.** Points, ammo, health and hits are decided by the host, not
+  by the guest. (Aim-assist tools are possible in any browser shooter; play with people you trust.)
+- **The host decides the match.** Hosting means your browser runs the game, so a guest has to
+  trust the host the way they would a game server.
+- **Players in a party can see each other's IP address.** That is how peer-to-peer connections
+  work (most console and PC games with player hosting are the same). It can reveal your rough
+  location and could be used to flood your connection, so share codes with people you know. The
+  host can kick or ban anyone; a ban sticks to that browser, though clearing site data gets
+  around it.
+
 | Mode | Players | |
 | --- | --- | --- |
 | Survival | 1-4 | Co-op rounds. Buy doors, weapons, perks; finish the map's quests. |
@@ -37,9 +56,11 @@ Settings → **Texture quality** picks the resolution of the generated materials
 no anisotropic filtering), Medium (256 px, 4x), High (512 px, 8x, the default) or Ultra
 (1024 px, 16x). Changing it regenerates the textures in the background.
 
-Settings → **Frame rate limit** caps rendering at 30, 60, 120, 144, 165, 240 or 360 fps, or
-"Match display" to draw every refresh. Browsers draw in step with the monitor, so a 360 Hz
-monitor runs the game at up to 360 fps; the settings screen shows the refresh rate it measured.
+Settings → Video → **Frame rate** defaults to your monitor's refresh rate, which the game
+measures on the menus (and remembers): a 144 Hz monitor shows "144 fps (matches your 144 Hz
+display)", a 360 Hz monitor runs at 360 fps. Lower caps (30 to 300) are offered when they are
+below your monitor's rate. Browsers draw in step with the monitor, so the frame rate can't go
+above it.
 The simulation always ticks at 60 Hz, and the camera, other players and zombies are blended
 between ticks, so every displayed frame moves. **Show FPS counter** adds a frame rate and
 frame time readout.
@@ -119,9 +140,10 @@ The models in `public/assets` are generated placeholders. Drop in a `.glb` with 
 replace one; the loader bakes node transforms and reads PBR factors and base-colour textures.
 Skinning and animation are not supported yet.
 
-## Development
+## For developers
 
-Requires Rust (with `rustup target add wasm32-unknown-unknown`) and Node 20+.
+You don't need any of this to play: it is for running or changing the code on your own machine.
+It needs Rust (with `rustup target add wasm32-unknown-unknown`) and Node 20+.
 
 ```bash
 npm install

@@ -592,6 +592,35 @@ mod tests {
     }
 
     #[test]
+    fn wedged_against_a_box_edge_never_pushes_through_the_wall_behind() {
+        // A wall ending at z = 6 and a 0.9 m box starting at z = 6.7: a gap exactly one body wide.
+        // Feet 0.4 mm below the box top, drifting toward it. This used to chain push-outs through
+        // every wall behind the player and out of the map.
+        let mut w = World::default();
+        w.solids.push(solid(v3(-50.0, -1.0, -50.0), v3(50.0, 0.0, 50.0)));
+        for z in [0.0, 2.0, 4.0] {
+            w.solids.push(solid(v3(-10.0, 0.0, z), v3(10.0, 7.0, z + 2.0)));
+        }
+        w.solids.push(solid(v3(0.7, 0.0, 6.7), v3(1.3, 0.9, 7.3)));
+        let mut pos = v3(0.39, 0.8996, 6.3500547);
+        let mut vel = v3(0.0, -0.09, 0.21);
+        w.slide_move(&mut pos, &mut vel, RADIUS, HEIGHT, 1.0 / 20.0, false);
+        assert!(pos.z > 6.3 && pos.z < 6.4, "player was pushed to z = {}", pos.z);
+        assert!(!w.overlaps(&Aabb::feet(pos, RADIUS, HEIGHT)) || pos.y > 0.85, "left inside geometry at {pos:?}");
+    }
+
+    #[test]
+    fn brushing_a_tall_wall_while_falling_does_not_land_on_its_top() {
+        let mut w = world();
+        // Overlapping the 8 m wall by a hair (as if wedged), falling.
+        let mut pos = v3(0.0, 3.0, -1.66);
+        let mut vel = v3(0.0, -5.0, 0.0);
+        w.slide_move(&mut pos, &mut vel, RADIUS, HEIGHT, 1.0 / 60.0, false);
+        assert!(pos.y <= 3.0, "teleported up to y = {}", pos.y);
+        w.solids.clear();
+    }
+
+    #[test]
     fn state_round_trips() {
         use crate::util::{Field, Rd};
         let (w, mut c, mut p) = (world(), Ctl::spawn(v3(0.0, 0.0, 10.0), 0.3), 0);
