@@ -6,7 +6,7 @@ import { loadModel, type Model } from '../gfx/loader';
 import { compose, invert, lookAt, mat4, mul, ortho, perspective, transformPoint } from '../gfx/mat';
 import { cubeMesh, cylinderMesh, FLAG_NOSHADOW, FLAG_VIEWMODEL, LIGHT_FLOATS, MAT, MAX_LIGHTS, sphereMesh, type Draw, type Frame, type Renderer } from '../gfx/renderer';
 import { Batch, type V3 } from './batch';
-import { CAMOS, FATIGUES, VESTS, type Look } from './look';
+import { BOOTS, CAMOS, FATIGUES, GLOVES, HELMETS, SKINS, VESTS, type Look } from './look';
 import { Scenery, SCENERY_MATS } from './scenery';
 import { MODES, TEAM_COLORS } from './rules';
 import type { Session, View } from './session';
@@ -33,7 +33,7 @@ const PERK_COLORS: RGB[] = [[0.9, 0.2, 0.15], [0.2, 0.85, 0.3], [1, 0.65, 0.1], 
 const POWERUP_COLORS: RGB[] = [[0.2, 1, 0.3], [1, 0.2, 0.2], [1, 0.85, 0.1], [0.9, 0.9, 1], [0.3, 0.6, 1]];
 export const PLAYER_COLORS: RGB[] = [[0.2, 0.55, 1], [1, 0.45, 0.15], [0.3, 0.85, 0.35], [0.9, 0.3, 0.8], [1, 0.85, 0.2], [0.3, 0.9, 0.9], [0.9, 0.25, 0.25], [0.75, 0.75, 0.8]];
 /** Clothing tints for the undead, picked per zombie. */
-const RAGS: RGB[] = [[2.0, 1.8, 1.5], [1.4, 1.6, 2.1], [2.3, 1.9, 1.3], [1.6, 1.9, 1.5], [2.1, 1.4, 1.3]];
+const RAGS: RGB[] = [[1.5, 1.4, 1.25], [1.1, 1.2, 1.4], [1.6, 1.4, 1.1], [1.15, 1.3, 1.1], [1.45, 1.1, 1.05], [0.8, 0.8, 0.85], [1.7, 1.65, 1.55]];
 const LAMP: RGB = [1.0, 0.72, 0.42];
 
 const I = { door: 1, wallbuy: 2, perk: 3, crate: 4, bench: 5, tonic: 6, power: 7, workbench: 8, part: 9, console: 10 };
@@ -92,6 +92,7 @@ export class Scene {
   private staticLights: LightSrc[] = [];
   /** Per-zombie animation state, and the bodies of the recently killed. */
   private zanim = new Map<number, { phase: number; yaw: number; speed: number; attack: number; flinch: number; x: number; z: number; hp: number; kind: number; seen: number }>();
+  private panim = new Map<number, { phase: number; x: number; z: number; speed: number; crouch: number; reload: number; swap: number; lean: number; seen: number }>();
   private corpses: { id: number; x: number; y: number; z: number; yaw: number; kind: number; t: number; rec: Float32Array }[] = [];
   private switchAt: { x: number; z: number; nx: number; nz: number } | null = null;
   private lever = 0;
@@ -398,7 +399,9 @@ export class Scene {
     const rag = RAGS[z.id % RAGS.length];
     const trouser: RGB = [rag[2] * 0.7, rag[1] * 0.7, rag[0] * 0.75];
     const pall = 0.85 + hsh(8) * 0.35;
-    const skinTint: RGB = turned ? [1.0, 1.2, 1.8] : [1.05 * pall, 1.18 * pall, 1.0 * pall];
+    // Dead skin: grey with a little green or blue in it, never healthy.
+    const hue = hsh(15);
+    const skinTint: RGB = turned ? [1.0, 1.2, 1.8] : [(0.78 + hue * 0.12) * pall, (0.86 + hue * 0.06) * pall, (0.78 + (1 - hue) * 0.1) * pall];
     const gore: RGB = [0.5, 0.05, 0.04];
 
     let a = this.zanim.get(z.id);
@@ -454,6 +457,7 @@ export class Scene {
       const sole = Math.max(ankle[1] - 0.04, z.y + rise + 0.04);
       out.limb([ankle[0] - fwd[0] * 0.03, sole, ankle[2] - fwd[2] * 0.03], [ankle[0] + fwd[0] * 0.17 * cf, sole + sf * 0.12, ankle[2] + fwd[2] * 0.17 * cf], 0.045, [0.5, 0.45, 0.4], MAT.polymer, 0, 0.055);
     }
+    const jawDropEarly = (0.035 + a.attack * 0.04) * live;
     // Torso: pelvis, a hunched rib cage wider at the shoulders, and the belly between.
     out.limb(pelvis, chest, 0.15, rag, MAT.fabric, 0, 0.115, right);
     const ribs = at(chestL[0], chestL[1] - 0.09, chestL[2] - 0.01);
@@ -463,6 +467,21 @@ export class Scene {
     const wound = at(chestL[0] + (hsh(10) - 0.5) * 0.2, chestL[1] - 0.16 - hsh(11) * 0.1, chestL[2] + 0.1);
     out.limb(wound, [wound[0] + right[0] * 0.07, wound[1] - 0.06, wound[2] + right[2] * 0.07], 0.05, gore, MAT.skin, 0, 0.03);
     void ribs;
+    // Ripped clothing: strips of shirt hanging and swinging, a torn trouser leg, dried blood.
+    for (let k = 0; k < 4; k++) {
+      const sx = (hsh(20 + k) - 0.5) * 0.36, len = 0.12 + hsh(24 + k) * 0.2;
+      const top = at(chestL[0] + sx, chestL[1] - 0.24 - hsh(28 + k) * 0.08, chestL[2] + (k % 2 ? 0.11 : -0.1));
+      const swing = Math.sin(ph * 2 + k * 1.7) * 0.05 * go + Math.sin(t * 1.4 + k) * 0.012;
+      out.limb(top, [top[0] + right[0] * swing, top[1] - len, top[2] + right[2] * swing - base.fwd[2] * 0.02 * go], 0.028, [rag[0] * 0.8, rag[1] * 0.8, rag[2] * 0.8], MAT.fabric, 0, 0.008);
+    }
+    // Bare, grey shin where one trouser leg has gone, and stains down the front.
+    const tornSide = hsh(32) < 0.5 ? -1 : 1;
+    const [tk, ta] = chain(at, [tornSide * 0.1, hip - 0.04, 0], 0.46, 0.44, Math.sin(ph + (tornSide > 0 ? Math.PI : 0)) * amp * (limp === tornSide ? 0.45 : 1) * live, (Math.max(0, -Math.cos(ph + (tornSide > 0 ? Math.PI : 0))) * amp * 1.5 * (limp === tornSide ? 0.45 : 1) + 0.1) * live + fall * 0.5 * (tornSide > 0 ? 1 : 0.3));
+    out.limb([(tk[0] + ta[0]) / 2, (tk[1] + ta[1]) / 2, (tk[2] + ta[2]) / 2], ta, 0.06, skinTint, MAT.skin, 0, 0.064);
+    const stain = at(chestL[0] + (hsh(33) - 0.5) * 0.12, chestL[1] - 0.02, chestL[2] + 0.115);
+    out.box(stain[0], stain[1], stain[2], 0.16, 0.2, 0.05, [0.28, 0.04, 0.03], MAT.fabric, 0, 0, a.yaw, -lean);
+    const chin = at(headL[0], headL[1] - 0.07 - jawDropEarly, headL[2] + 0.09);
+    out.box(chin[0], chin[1], chin[2], 0.08, 0.05, 0.05, gore, MAT.skin, 0, 0, a.yaw);
     // Neck and head: skull, brow, sunken cheeks, a slack jaw that works as it moans.
     out.limb(chest, headP, 0.05, skinTint, MAT.skin);
     const tilt = (limp * 0.25 + Math.sin(t * 0.8 + z.id) * 0.08) * live;
@@ -512,86 +531,208 @@ export class Scene {
   }
 
   /** A survivor: helmet, team-coloured vest over fatigues, boots, rifle held at the ready. */
-  private survivor(out: Batch, glow: Batch, groups: Map<string, { mesh: number; shadow: boolean; batch: Batch }>, p: { id: number; x: number; y: number; z: number; yaw: number; rec: Float32Array }, t: number): void {
+  /**
+   * A soldier. Built from rounded forms: boots, trousers with cargo pockets and knee pads, a belt
+   * with holster and pouches, a plate carrier with magazines, a pack, sleeves or bare forearms,
+   * gloved hands on the weapon, and a head with the chosen face, eyewear and headgear. The stride
+   * follows the ground covered, the spine leans into a run and bends with the aim, and reloading
+   * or swapping weapons moves the hands and the gun.
+   */
+  private survivor(out: Batch, glow: Batch, groups: Map<string, { mesh: number; shadow: boolean; batch: Batch }>, p: { id: number; x: number; y: number; z: number; yaw: number; rec: Float32Array }, t: number, dt = 0): void {
     const { P } = this.sim.L;
     const look = this.lookOf(p.id);
+    const hard = this.casters; // flat-sided parts (plates, pouches, soles)
     // In team modes the vest always shows the side, so friend and foe are easy to tell apart.
-    const side = MODES[this.session.start.mode]?.teams ? TEAM_COLORS[p.rec[P.team]] : undefined;
-    const team: RGB = side ?? (look.vest ? VESTS[look.vest - 1].rgb : PLAYER_COLORS[p.id % PLAYER_COLORS.length]);
+    const sideTint = MODES[this.session.start.mode]?.teams ? TEAM_COLORS[p.rec[P.team]] : undefined;
+    const vest: RGB = sideTint ?? (look.vest ? VESTS[look.vest - 1].rgb : [0.3, 0.34, 0.26]);
     const fatigues: RGB = FATIGUES[look.fatigues]?.rgb ?? FATIGUES[0].rgb;
+    const skin: RGB = SKINS[look.skin]?.rgb ?? SKINS[1].rgb;
+    const glove: RGB = look.gloves === 4 ? skin : GLOVES[look.gloves]?.rgb ?? GLOVES[0].rgb;
+    const gloveMat = look.gloves === 4 ? MAT.skin : MAT.fabric;
+    const boot: RGB = BOOTS[look.boots]?.rgb ?? BOOTS[0].rgb;
+    const helm: RGB = HELMETS[look.helmet]?.rgb ?? HELMETS[0].rgb;
+    const web: RGB = [vest[0] * 0.8, vest[1] * 0.8, vest[2] * 0.8];
+    const bulk = [0.92, 1, 1.12][look.build] ?? 1;
     const life = p.rec[P.life];
     const pitch = p.rec[P['ctl.pitch']];
-    const speed = Math.hypot(p.rec[P['ctl.vel']], p.rec[P['ctl.vel'] + 2]);
-    const crouch = p.rec[P['ctl.crouched']] ? 0.4 : 0;
+    const crouch = p.rec[P['ctl.crouched']] ? 1 : 0;
     const slide = p.rec[P['ctl.mode']] === 1;
-    const { at, right } = frame(p.x, p.y, p.z, p.yaw);
+
+    let a = this.panim.get(p.id);
+    if (!a) { a = { phase: 0, x: p.x, z: p.z, speed: 0, crouch: 0, reload: 0, swap: 0, lean: 0, seen: t }; this.panim.set(p.id, a); }
+    const moved = Math.hypot(p.x - a.x, p.z - a.z);
+    const speed = dt > 0 ? Math.min(moved / dt, 12) : a.speed;
+    const k = Math.min(1, dt * 9);
+    a.speed += (speed - a.speed) * k;
+    a.phase += (moved / 1.5) * Math.PI;
+    a.crouch += (crouch - a.crouch) * k;
+    a.reload += ((p.rec[P['arms.reload_t']] > 0 ? 1 : 0) - a.reload) * k;
+    a.swap += ((p.rec[P['arms.switch_t']] > 0 ? 1 : 0) - a.swap) * Math.min(1, dt * 12);
+    a.lean += (Math.min(1, a.speed / 7) - a.lean) * k;
+    a.x = p.x; a.z = p.z; a.seen = t;
+
+    const base = frame(p.x, p.y, p.z, p.yaw);
+    const { right, fwd } = base;
+    const at = (lx: number, ly: number, lz: number): V3 => base.at(lx * bulk, ly, lz);
     if (life === 1) {
-      // Downed: on the ground, waving for help.
-      const torso = at(0, 0.25, 0.1), head = at(0, 0.32, 0.6);
-      out.limb(at(0, 0.2, -0.5), torso, 0.16, team, MAT.fabric, 0, 0.11);
-      out.box(head[0], head[1], head[2], 0.22, 0.24, 0.24, [0.8, 0.8, 0.8], MAT.painted, 0, 0, p.yaw);
+      // Downed: on one side, an arm up for help.
+      out.limb(at(0, 0.2, -0.55), at(0, 0.24, 0.1), 0.17, fatigues, MAT.fabric, 0, 0.12);
+      out.limb(at(0, 0.2, -0.55), at(0.12, 0.14, -1.0), 0.09, fatigues, MAT.fabric);
+      out.limb(at(0.12, 0.14, -1.0), at(0.1, 0.1, -1.4), 0.07, fatigues, MAT.fabric);
+      hard.box(...at(0, 0.27, 0.02), 0.44, 0.2, 0.4, vest, MAT.fabric, 0, 0, p.yaw);
+      out.box(...at(0, 0.3, 0.45), 0.2, 0.22, 0.24, skin, MAT.skin, 0, 0, p.yaw);
+      const wave = Math.sin(t * 5) * 0.12;
+      out.limb(at(0.2, 0.3, 0.2), at(0.3 + wave, 0.7, 0.3), 0.05, fatigues, MAT.fabric);
       glow.box(p.x, 1.4 + Math.sin(t * 4) * 0.1, p.z, 0.2, 0.2, 0.2, [0.3, 0.6, 1], -1, 4, FLAG_NOSHADOW, t * 2, 0.6);
       return;
     }
-    const ph = t * Math.max(2, speed * 1.4);
-    const amp = Math.min(0.55, speed * 0.07);
-    const hip = 0.95 - crouch * 0.45 - (slide ? 0.45 : 0);
-    for (const side of [-1, 1]) {
-      const sp = ph + (side > 0 ? Math.PI : 0);
+    const ph = a.phase;
+    const go = Math.min(1, a.speed / 2);
+    const amp = Math.min(0.62, a.speed * 0.085) * (1 - a.crouch * 0.3);
+    const bounce = Math.abs(Math.cos(ph)) * 0.05 * go;
+    const hip = 0.96 - a.crouch * 0.42 - (slide ? 0.45 : 0) + bounce;
+    // Legs.
+    for (const sd of [-1, 1]) {
+      const sp = ph + (sd > 0 ? Math.PI : 0);
       const [knee, ankle] = slide
-        ? [at(side * 0.12, 0.35, 0.35 + (side > 0 ? 0.25 : 0)), at(side * 0.12, 0.1, 0.75 + (side > 0 ? 0.2 : 0))]
-        : chain(at, [side * 0.11, hip - 0.04, 0], 0.46, 0.44, Math.sin(sp) * amp + crouch * 0.9, Math.max(0, -Math.cos(sp)) * amp * 1.4 + crouch * 1.8 + 0.05);
-      out.limb(at(side * 0.11, hip, 0), knee, 0.09, fatigues, MAT.fabric, 0, 0.095, right);
-      out.limb(knee, ankle, 0.068, fatigues, MAT.fabric, 0, 0.07, right);
-      out.box(ankle[0] + Math.sin(-p.yaw) * 0.06, Math.max(ankle[1] - 0.04, p.y + 0.05), ankle[2] - Math.cos(p.yaw) * 0.06, 0.11, 0.1, 0.26, [0.9, 0.9, 0.9], MAT.polymer, 0, 0, p.yaw);
+        ? [at(sd * 0.12, 0.35, 0.35 + (sd > 0 ? 0.25 : 0)), at(sd * 0.12, 0.1, 0.75 + (sd > 0 ? 0.2 : 0))]
+        : chain(at, [sd * 0.105, hip - 0.04, 0], 0.46, 0.45, Math.sin(sp) * amp + a.crouch * 0.85, Math.max(0, -Math.cos(sp)) * amp * 1.5 + a.crouch * 1.7 + 0.06);
+      const hipJ = at(sd * 0.105, hip, 0);
+      out.limb(hipJ, knee, 0.095 * bulk, fatigues, MAT.fabric, 0, 0.1 * bulk, right);
+      out.limb(knee, ankle, 0.066, fatigues, MAT.fabric, 0, 0.072, right);
+      // Cargo pocket on the thigh.
+      const pk: V3 = [(hipJ[0] + knee[0]) / 2 + right[0] * sd * 0.1, (hipJ[1] + knee[1]) / 2, (hipJ[2] + knee[2]) / 2 + right[2] * sd * 0.1];
+      hard.box(pk[0], pk[1], pk[2], 0.05, 0.16, 0.13, fatigues, MAT.fabric, 0, 0, p.yaw);
+      if (look.pads > 0) out.box(knee[0] + fwd[0] * 0.05, knee[1], knee[2] + fwd[2] * 0.05, 0.12, 0.14, 0.1, [0.5, 0.5, 0.5], MAT.polymer, 0, 0, p.yaw);
+      // Boot: ankle, toe and a dark sole.
+      const sole = Math.max(ankle[1] - 0.05, p.y + 0.045);
+      out.limb([ankle[0], ankle[1] + 0.02, ankle[2]], [ankle[0], sole + 0.03, ankle[2]], 0.058, boot, MAT.fabric, 0, 0.065);
+      out.limb([ankle[0] - fwd[0] * 0.02, sole + 0.012, ankle[2] - fwd[2] * 0.02], [ankle[0] + fwd[0] * 0.16, sole + 0.005, ankle[2] + fwd[2] * 0.16], 0.047, boot, MAT.fabric, 0, 0.056);
+      hard.box(ankle[0] + fwd[0] * 0.065, sole - 0.03, ankle[2] + fwd[2] * 0.065, 0.1, 0.03, 0.29, [0.25, 0.25, 0.25], MAT.polymer, 0, 0, p.yaw);
     }
-    const chestL: [number, number, number] = [0, hip + 0.5, 0.05 + crouch * 0.1];
-    const pelvis = at(0, hip, 0), chest = at(...chestL);
-    out.limb(pelvis, chest, 0.17, fatigues, MAT.fabric, 0, 0.12, right);
-    // Plate carrier with pouches in the team colour.
-    out.box(chest[0], chest[1] - 0.12, chest[2], 0.42, 0.42, 0.3, team, MAT.fabric, 0, 0, p.yaw);
-    for (const lx of [-0.12, 0, 0.12]) { const q = at(lx, chestL[1] - 0.26, chestL[2] + 0.17); out.box(q[0], q[1], q[2], 0.1, 0.12, 0.06, team, MAT.fabric, 0, 0, p.yaw); }
-    // Head and the chosen headgear.
-    const head = at(0, chestL[1] + 0.27, chestL[2] + 0.02);
-    const hp = pitch * 0.5;
-    out.box(head[0], head[1], head[2], 0.2, 0.24, 0.22, [1, 0.95, 0.9], MAT.skin, 0, 0, p.yaw, hp);
-    switch (look.headgear) {
-      case 0: { // combat helmet and goggles
-        out.box(head[0], head[1] + 0.09, head[2], 0.27, 0.15, 0.29, [0.6, 0.65, 0.55], MAT.painted, 0, 0, p.yaw, hp);
-        const goggle = at(0, chestL[1] + 0.3, chestL[2] + 0.13);
-        out.box(goggle[0], goggle[1], goggle[2], 0.2, 0.05, 0.03, [0.3, 0.3, 0.3], MAT.polymer, 0, 0, p.yaw, hp);
-        break;
-      }
-      case 1: { // field cap with a brim
-        out.box(head[0], head[1] + 0.1, head[2], 0.23, 0.1, 0.24, fatigues, MAT.fabric, 0, 0, p.yaw, hp);
-        const brim = at(0, chestL[1] + 0.36, chestL[2] + 0.16);
-        out.box(brim[0], brim[1], brim[2], 0.2, 0.02, 0.12, fatigues, MAT.fabric, 0, 0, p.yaw, hp - 0.15);
-        break;
-      }
-      case 2: // beanie
-        out.box(head[0], head[1] + 0.08, head[2], 0.23, 0.17, 0.24, team, MAT.fabric, 0, 0, p.yaw, hp);
-        break;
-      case 3: // hood
-        out.box(head[0], head[1] + 0.03, head[2] - 0.02, 0.3, 0.33, 0.3, fatigues, MAT.fabric, 0, 0, p.yaw, hp);
-        break;
+    // Spine: leans into a run and bends with the aim.
+    const bend = a.lean * 0.22 + a.crouch * 0.2 - pitch * 0.25;
+    const up = (h: number, fwdOff = 0): [number, number, number] => [0, hip + Math.cos(bend) * h, Math.sin(bend) * h + fwdOff];
+    const sway = Math.sin(ph) * 0.03 * go;
+    const pelvis = at(0, hip, 0);
+    const waist = at(sway * 0.3, ...up(0.2).slice(1) as [number, number]);
+    const chestL = up(0.48, 0.02);
+    const chest = at(sway, chestL[1], chestL[2]);
+    out.limb(at(-0.07, hip - 0.02, 0), at(0.07, hip - 0.02, 0), 0.125 * bulk, fatigues, MAT.fabric, 0, 0.11); // hips
+    out.limb(pelvis, waist, 0.15 * bulk, fatigues, MAT.fabric, 0, 0.115 * bulk, right);
+    out.limb(waist, chest, 0.17 * bulk, fatigues, MAT.fabric, 0, 0.125 * bulk, right);
+    out.limb(at(-0.15, chestL[1] + 0.02, chestL[2]), at(0.15, chestL[1] + 0.02, chestL[2]), 0.1 * bulk, fatigues, MAT.fabric, 0, 0.1); // shoulders
+    // Belt, holster and pouches.
+    hard.box(...at(0, hip + 0.06, 0), 0.36 * bulk, 0.055, 0.27, [0.35, 0.33, 0.3], MAT.fabric, 0, 0, p.yaw);
+    hard.box(...at(0.2, hip - 0.06, 0.02), 0.06, 0.2, 0.11, [0.2, 0.2, 0.2], MAT.polymer, 0, 0, p.yaw);
+    hard.box(...at(-0.2, hip + 0.02, 0.0), 0.07, 0.12, 0.12, web, MAT.fabric, 0, 0, p.yaw);
+    // Plate carrier: front and back plates, cummerbund, shoulder straps, three magazine pouches, a radio.
+    const plate = (lz: number, th: number) => hard.box(...at(sway * 0.8, chestL[1] - 0.1, chestL[2] + lz), 0.33 * bulk, 0.36, th, vest, MAT.fabric, 0, 0, p.yaw, -bend);
+    plate(0.125, 0.07); plate(-0.125, 0.07);
+    hard.box(...at(sway * 0.6, chestL[1] - 0.2, chestL[2]), 0.41 * bulk, 0.15, 0.3, web, MAT.fabric, 0, 0, p.yaw, -bend);
+    for (const sx of [-0.11, 0.11]) hard.box(...at(sx, chestL[1] + 0.1, chestL[2]), 0.06, 0.05, 0.3, web, MAT.fabric, 0, 0, p.yaw, -bend);
+    for (const lx of [-0.11, 0, 0.11]) {
+      hard.box(...at(lx + sway * 0.7, chestL[1] - 0.2, chestL[2] + 0.185), 0.085, 0.16, 0.06, web, MAT.fabric, 0, 0, p.yaw, -bend);
+      hard.box(...at(lx + sway * 0.7, chestL[1] - 0.105, chestL[2] + 0.185), 0.06, 0.04, 0.035, [0.15, 0.15, 0.15], MAT.polymer, 0, 0, p.yaw, -bend);
     }
-    // Arms meet on the gun, which follows the aim pitch.
-    const gunAt = at(0.12, chestL[1] - 0.05, chestL[2] + 0.3);
+    hard.box(...at(-0.15, chestL[1] + 0.02, chestL[2] + 0.15), 0.06, 0.13, 0.045, [0.12, 0.12, 0.12], MAT.polymer, 0, 0, p.yaw, -bend);
+    out.box(...at(-0.15, chestL[1] + 0.14, chestL[2] + 0.15), 0.012, 0.16, 0.012, [0.1, 0.1, 0.1], MAT.polymer); // aerial
+    // Pack.
+    if (look.pack > 0) {
+      const size = [0, 0.34, 0.3, 0.2, 0.46][look.pack] ?? 0.3, depth = [0, 0.16, 0.14, 0.07, 0.22][look.pack] ?? 0.15;
+      const packTint: RGB = look.pack === 2 ? [0.2, 0.22, 0.2] : web;
+      hard.box(...at(0, chestL[1] - 0.12 - (look.pack === 4 ? 0.06 : 0), chestL[2] - 0.17 - depth / 2), 0.3 * bulk, size, depth, packTint, look.pack === 2 ? MAT.polymer : MAT.fabric, 0, 0, p.yaw, -bend);
+      if (look.pack === 2) out.box(...at(0.1, chestL[1] + 0.35, chestL[2] - 0.22), 0.014, 0.6, 0.014, [0.1, 0.1, 0.1], MAT.polymer);
+      if (look.pack === 4) hard.box(...at(0, chestL[1] + 0.12, chestL[2] - 0.26), 0.34 * bulk, 0.14, 0.2, fatigues, MAT.fabric, 0, 0, p.yaw, -bend);
+    }
+    // Neck and head (the head turns with the aim).
+    const hp = pitch * 0.55;
+    const neck = at(sway, chestL[1] + 0.13, chestL[2] + 0.02);
+    const headL: [number, number, number] = [sway, chestL[1] + 0.27, chestL[2] + 0.04 + Math.sin(-hp) * 0.02];
+    const head = at(...headL);
+    out.limb(chest, neck, 0.055, skin, MAT.skin);
+    const masked = look.face === 3;
+    const faceTint: RGB = masked ? [0.35, 0.35, 0.36] : skin;
+    out.box(head[0], head[1], head[2], 0.19, 0.24, 0.215, faceTint, masked ? MAT.fabric : MAT.skin, 0, 0, p.yaw, hp);
+    const onHead = (lx: number, ly: number, lz: number): V3 => at(headL[0] + lx / bulk, headL[1] + ly * Math.cos(hp) + lz * Math.sin(hp), headL[2] + lz * Math.cos(hp) - ly * Math.sin(hp));
+    if (!masked) {
+      out.box(...onHead(0, -0.02, 0.105), 0.035, 0.05, 0.04, skin, MAT.skin, 0, 0, p.yaw, hp); // nose
+      for (const ex of [-0.1, 0.1]) out.box(...onHead(ex, 0, 0), 0.03, 0.06, 0.04, skin, MAT.skin, 0, 0, p.yaw, hp); // ears
+      for (const ex of [-0.04, 0.04]) out.box(...onHead(ex, 0.025, 0.098), 0.028, 0.014, 0.012, [0.08, 0.06, 0.05], MAT.skin, 0, 0, p.yaw, hp); // eyes
+    }
+    const hairTint: RGB = [0.16, 0.12, 0.09];
+    if (look.face === 1 || look.face === 2) out.box(...onHead(0, -0.075, 0.05), look.face === 2 ? 0.17 : 0.165, look.face === 2 ? 0.13 : 0.09, 0.15, look.face === 2 ? hairTint : [skin[0] * 0.6, skin[1] * 0.6, skin[2] * 0.6], look.face === 2 ? MAT.fabric : MAT.skin, 0, 0, p.yaw, hp);
+    if (look.face === 6) out.box(...onHead(0, -0.05, 0.1), 0.09, 0.02, 0.03, hairTint, MAT.fabric, 0, 0, p.yaw, hp);
+    if (look.face === 4) for (const ex of [-0.05, 0.05]) out.box(...onHead(ex, -0.01, 0.092), 0.06, 0.035, 0.03, [0.1, 0.14, 0.08], MAT.skin, 0, 0, p.yaw, hp + 0.3); // face paint
+    if (look.face === 5) out.box(...onHead(0, -0.06, 0.06), 0.185, 0.11, 0.16, [0.25, 0.27, 0.22], MAT.fabric, 0, 0, p.yaw, hp); // half mask
+    // Eyewear.
+    if (look.eyewear === 1) { out.box(...onHead(0, 0.03, 0.1), 0.17, 0.055, 0.05, [0.15, 0.15, 0.15], MAT.polymer, 0, 0, p.yaw, hp); out.box(...onHead(0, 0.03, 0.118), 0.14, 0.04, 0.02, [0.3, 0.2, 0.1], -1, 0, 0, p.yaw, hp, 0, 0.4, 0.1); }
+    if (look.eyewear === 2) out.box(...onHead(0, 0.028, 0.108), 0.16, 0.035, 0.025, [0.03, 0.03, 0.03], -1, 0, 0, p.yaw, hp, 0, 0.3, 0.08);
+    if (look.eyewear === 4) out.box(...onHead(0, 0.028, 0.108), 0.15, 0.035, 0.012, [0.6, 0.7, 0.8], -1, 0, 0, p.yaw, hp, 0, 0.2, 0.05);
+    // Headgear.
+    const hg = look.headgear;
+    if (hg === 0 || hg === 5) {
+      const high = hg === 5;
+      out.box(...onHead(0, 0.085, -0.005), 0.25, high ? 0.17 : 0.19, 0.27, helm, MAT.painted, 0, 0, p.yaw, hp);
+      if (!high) for (const ex of [-0.105, 0.105]) out.box(...onHead(ex, 0.0, -0.01), 0.04, 0.12, 0.16, helm, MAT.painted, 0, 0, p.yaw, hp); // ear cover
+      hard.box(...onHead(0, 0.1, 0.13), 0.06, 0.05, 0.02, [0.15, 0.15, 0.15], MAT.polymer, 0, 0, p.yaw, hp); // mount
+      for (const ex of [-0.127, 0.127]) hard.box(...onHead(ex, 0.07, 0), 0.012, 0.03, 0.14, [0.15, 0.15, 0.15], MAT.polymer, 0, 0, p.yaw, hp); // rails
+      out.box(...onHead(0, -0.1, 0.03), 0.17, 0.02, 0.1, [0.2, 0.2, 0.2], MAT.fabric, 0, 0, p.yaw, hp); // chin strap
+      if (high) { for (const ex of [-0.115, 0.115]) out.box(...onHead(ex, 0, 0), 0.05, 0.1, 0.09, [0.2, 0.22, 0.2], MAT.polymer, 0, 0, p.yaw, hp); out.limb(onHead(-0.115, -0.02, 0.03), onHead(-0.05, -0.06, 0.11), 0.008, [0.1, 0.1, 0.1], MAT.polymer); }
+    } else if (hg === 1) {
+      out.box(...onHead(0, 0.1, 0), 0.215, 0.1, 0.235, fatigues, MAT.fabric, 0, 0, p.yaw, hp);
+      hard.box(...onHead(0, 0.075, 0.15), 0.17, 0.014, 0.1, fatigues, MAT.fabric, 0, 0, p.yaw, hp - 0.15);
+    } else if (hg === 2) {
+      out.box(...onHead(0, 0.085, -0.005), 0.215, 0.17, 0.235, web, MAT.fabric, 0, 0, p.yaw, hp);
+    } else if (hg === 3) {
+      out.box(...onHead(0, 0.03, -0.03), 0.27, 0.31, 0.28, fatigues, MAT.fabric, 0, 0, p.yaw, hp);
+    } else if (hg === 4) {
+      out.box(...onHead(0, 0.1, -0.02), 0.2, 0.09, 0.22, hairTint, MAT.fabric, 0, 0, p.yaw, hp); // short hair
+    } else if (hg === 6) {
+      out.box(...onHead(0, 0.11, 0), 0.21, 0.09, 0.225, fatigues, MAT.fabric, 0, 0, p.yaw, hp);
+      out.box(...onHead(0, 0.075, 0), 0.4, 0.016, 0.42, fatigues, MAT.fabric, 0, 0, p.yaw, hp); // brim
+    } else if (hg === 7) {
+      out.box(...onHead(0, 0.09, -0.005), 0.205, 0.11, 0.225, [0.45, 0.1, 0.08], MAT.fabric, 0, 0, p.yaw, hp);
+      out.limb(onHead(0, 0.07, -0.11), onHead(0.03, 0.0, -0.19), 0.02, [0.45, 0.1, 0.08], MAT.fabric);
+    } else if (hg === 8) {
+      out.box(...onHead(0.02, 0.115, 0), 0.25, 0.06, 0.25, [0.35, 0.1, 0.1], MAT.fabric, 0, 0, p.yaw, hp, 0.15);
+    }
+    if (look.eyewear === 3 && (hg === 0 || hg === 5)) {
+      // Night-vision tubes flipped up on the helmet mount.
+      for (const ex of [-0.035, 0.035]) out.limb(onHead(ex, 0.13, 0.13), onHead(ex, 0.2, 0.2), 0.022, [0.12, 0.12, 0.12], MAT.polymer);
+    }
+    // Weapon: held at the shoulder, following the aim; it dips for a reload and drops for a swap.
+    const lower = a.swap * 0.9 + a.reload * 0.35;
+    const gunAt = at(0.13, chestL[1] - 0.04 - lower * 0.16, chestL[2] + 0.3 - a.swap * 0.06);
     const gm = mat4();
-    compose(gm, 0, gunAt[0], gunAt[1], gunAt[2], 1, 1, 1, p.yaw, pitch);
+    compose(gm, 0, gunAt[0], gunAt[1], gunAt[2], 1, 1, 1, p.yaw + a.reload * 0.25, pitch - lower * 0.7, a.reload * 0.5);
     const cur = p.rec[P['arms.cur']];
     const gun = p.rec[P[`arms.guns${cur}.id`]];
     const model = this.drawModel(groups, `weapons/${this.sim.catalog.weapons[gun]?.slug}`, gm, 0, true, CAMOS[look.camo]?.layer ?? -1);
     const grip = transformPoint(gm, [0, -0.02, 0.01]);
-    const fore = transformPoint(gm, [0, 0.0, Math.max(-0.35, (model?.min[2] ?? -0.4) * 0.55)]);
-    for (const [side, hand] of [[1, grip], [-1, fore]] as const) {
-      const sh = at(side * 0.22, chestL[1] - 0.02, chestL[2]);
-      const el: V3 = [(sh[0] + hand[0]) / 2 + right[0] * side * 0.08, (sh[1] + hand[1]) / 2 - 0.14, (sh[2] + hand[2]) / 2 + right[2] * side * 0.08];
-      out.limb(sh, el, 0.06, fatigues, MAT.fabric, 0, 0.06);
-      out.limb(el, hand as V3, 0.05, fatigues, MAT.fabric, 0, 0.05);
-      out.box(hand[0], hand[1], hand[2], 0.08, 0.07, 0.09, [0.9, 0.9, 0.9], MAT.polymer, 0, 0, p.yaw, pitch);
+    const foreZ = Math.max(-0.35, (model?.min[2] ?? -0.4) * 0.55);
+    // Reloading: the support hand leaves the handguard for the magazine well, down to a pouch and back.
+    const cycle = Math.sin(Math.min(1, a.reload) * Math.PI * (p.rec[P['arms.reload_t']] > 0 ? 1 - (p.rec[P['arms.reload_t']] % 1) : 0));
+    const magWell = transformPoint(gm, [0, -0.12, -0.12]);
+    const pouch = at(-0.1, chestL[1] - 0.2, chestL[2] + 0.2);
+    const foreRest = transformPoint(gm, [0, 0.0, foreZ]);
+    const reloadHand: V3 = [magWell[0] + (pouch[0] - magWell[0]) * cycle, magWell[1] + (pouch[1] - magWell[1]) * cycle, magWell[2] + (pouch[2] - magWell[2]) * cycle];
+    const fore = [0, 1, 2].map(i => foreRest[i] + (reloadHand[i] - foreRest[i]) * a.reload) as V3;
+    const bare = look.sleeves === 2, rolled = look.sleeves === 1;
+    for (const [sd, hand] of [[1, grip], [-1, fore]] as const) {
+      const sh = at(sd * 0.215, chestL[1] + 0.02, chestL[2]);
+      const el: V3 = [(sh[0] + hand[0]) / 2 + right[0] * sd * 0.09, (sh[1] + hand[1]) / 2 - 0.15, (sh[2] + hand[2]) / 2 + right[2] * sd * 0.09 - fwd[2] * 0.03];
+      out.box(sh[0], sh[1], sh[2], 0.15 * bulk, 0.15, 0.15, fatigues, MAT.fabric); // shoulder
+      out.limb(sh, el, 0.062 * bulk, bare ? skin : fatigues, bare ? MAT.skin : MAT.fabric, 0, 0.06 * bulk);
+      if (bare) out.limb(sh, [(sh[0] * 2 + el[0]) / 3, (sh[1] * 2 + el[1]) / 3, (sh[2] * 2 + el[2]) / 3], 0.07 * bulk, fatigues, MAT.fabric);
+      out.limb(el, hand as V3, 0.05 * bulk, bare || rolled ? skin : fatigues, bare || rolled ? MAT.skin : MAT.fabric, 0, 0.048 * bulk);
+      if (look.pads === 2) out.box(el[0], el[1], el[2], 0.11, 0.12, 0.11, [0.5, 0.5, 0.5], MAT.polymer);
+      // Hand: palm, thumb and fingers wrapped round the weapon.
+      out.box(hand[0], hand[1], hand[2], 0.075, 0.085, 0.095, glove, gloveMat, 0, 0, p.yaw, pitch);
+      for (let f = -1; f <= 1; f++) out.limb([hand[0] - right[0] * sd * 0.03, hand[1] + f * 0.02, hand[2] - right[2] * sd * 0.03], [hand[0] - right[0] * sd * 0.045, hand[1] + f * 0.02 - 0.012, hand[2] - right[2] * sd * 0.045 + fwd[2] * 0.02], 0.012, glove, gloveMat);
     }
-    if (p.rec[P.shield] > 0) { const q = at(0, chestL[1] - 0.1, chestL[2] - 0.22); out.box(q[0], q[1], q[2], 0.6, 0.8, 0.06, [0.8, 0.8, 0.8], MAT.rust, 0, 0, p.yaw); }
+    if (p.rec[P.shield] > 0) hard.box(...at(0, chestL[1] - 0.1, chestL[2] - 0.3), 0.6, 0.8, 0.06, [0.8, 0.8, 0.8], MAT.rust, 0, 0, p.yaw);
+    void neck;
   }
 
   build(view: View, dt: number, aspect: number, settings: SceneSettings): Frame {
@@ -709,12 +850,12 @@ export class Scene {
     }
     this.corpses = this.corpses.filter(c => c.t < 6.5);
     if (this.zanim.size > 200) for (const [id, a] of this.zanim) if (t - a.seen > 10) this.zanim.delete(id);
-    for (const p of s.players()) if (p.rec[P.life] !== 2) this.survivor(round, glows, groups, p, t);
+    for (const p of s.players()) if (p.rec[P.life] !== 2) this.survivor(round, glows, groups, p, t, dt);
     // Third person: our own body is drawn like anyone else's, where our feet are.
     const third = (settings.third ?? 0) > 0.25;
     if (third && me.length && me[P.life] !== 2) {
       const f = s.feet();
-      this.survivor(round, glows, groups, { id: s.selfId, x: f[0], y: f[1], z: f[2], yaw: view.yaw, rec: me }, t);
+      this.survivor(round, glows, groups, { id: s.selfId, x: f[0], y: f[1], z: f[2], yaw: view.yaw, rec: me }, t, dt);
     }
 
     // Power-ups, grenades and lingering effects.
@@ -867,17 +1008,32 @@ export class Scene {
       // Arms: sleeves from below the screen edge to gloved hands on the grip and the handguard.
       const cam = (x: number, y: number, z: number) => transformPoint(camWorld, [x, y, z]) as V3;
       const grip = transformPoint(world, [0, -0.035, 0.015]) as V3;
-      const fore = transformPoint(world, [0, -0.005, Math.max(-0.3, (model?.min[2] ?? -0.35) * 0.62)]) as V3;
+      const foreRest = transformPoint(world, [0, -0.005, Math.max(-0.3, (model?.min[2] ?? -0.35) * 0.62)]) as V3;
+      // Reload: the support hand drops to the magazine, pulls it down and out of view, and seats a
+      // fresh one; on a swap both hands come off as the weapon goes down.
+      const magAt = transformPoint(world, [0, -0.1, -0.14]) as V3;
+      const pull = reloading ? Math.sin(Math.min(1, Math.max(0, (rphase - 0.12) / 0.5)) * Math.PI) : 0;
+      const away = cam(-0.12, -0.5, -0.25);
+      const magHand = [0, 1, 2].map(i => magAt[i] + (away[i] - magAt[i]) * pull) as V3;
+      const fore = [0, 1, 2].map(i => foreRest[i] + (magHand[i] - foreRest[i]) * reload) as V3;
       const sleeve: RGB = FATIGUES[myLook.fatigues]?.rgb ?? FATIGUES[0].rgb;
       const vf = FLAG_VIEWMODEL | FLAG_NOSHADOW;
       // Only forearms are visible: they enter from below the screen edge, like a real first-person view.
       const rElbow = cam(0.24 - ads * 0.1, -0.42, -0.2), lElbow = cam(-0.1 + ads * 0.04, -0.4, -0.32);
-      vm.limb(rElbow, grip, 0.034, sleeve, MAT.fabric, vf);
-      vm.limb(lElbow, fore, 0.032, sleeve, MAT.fabric, vf);
+      // Forearms and gloves follow the operator's customization.
+      const mySkin: RGB = SKINS[myLook.skin]?.rgb ?? SKINS[1].rgb;
+      const bareArm = myLook.sleeves > 0;
+      const armTint = bareArm ? mySkin : sleeve, armMat = bareArm ? MAT.skin : MAT.fabric;
+      const gloveTint: RGB = myLook.gloves === 4 ? mySkin : GLOVES[myLook.gloves]?.rgb ?? [0.8, 0.8, 0.8];
+      const gloveMat = myLook.gloves === 4 ? MAT.skin : MAT.fabric;
+      vm.limb(rElbow, grip, 0.034, armTint, armMat, vf);
+      vm.limb(lElbow, fore, 0.032, armTint, armMat, vf);
+      // The magazine travels with the hand while it is out of the weapon.
+      if (reload > 0.5 && pull > 0.15) this.casters.box(fore[0], fore[1] - 0.02, fore[2], 0.028, 0.13, 0.05, [0.2, 0.2, 0.2], MAT.polymer, 0, vf, view.yaw, view.pitch + 0.2);
       // Gloved hands wrapped around the grip and the handguard.
       for (const [h, from] of [[grip, rElbow], [fore, lElbow]] as const) {
         const d = [h[0] - from[0], h[1] - from[1], h[2] - from[2]], l = Math.hypot(d[0], d[1], d[2]) || 1;
-        vm.limb([h[0] - d[0] / l * 0.04, h[1] - d[1] / l * 0.04, h[2] - d[2] / l * 0.04], [h[0] + d[0] / l * 0.03, h[1] + d[1] / l * 0.03, h[2] + d[2] / l * 0.03], 0.03, [0.8, 0.8, 0.8], MAT.polymer, vf, 0.036);
+        vm.limb([h[0] - d[0] / l * 0.04, h[1] - d[1] / l * 0.04, h[2] - d[2] / l * 0.04], [h[0] + d[0] / l * 0.03, h[1] + d[1] / l * 0.03, h[2] + d[2] / l * 0.03], 0.03, gloveTint, gloveMat, vf, 0.036);
       }
       if (this.muzzle > 0) {
         this.muzzle -= dt;
@@ -963,8 +1119,8 @@ export class Scene {
         vignette: 0.4 + (1 - Math.max(health, 0)) * 0.35,
         damage: Math.max(this.hurt * 0.6, downed ? 0.45 : (1 - health) * 0.5),
         grain: 0.045,
-        saturation: downed ? 0.35 : 0.86,
-        contrast: 0.35,
+        saturation: downed ? 0.35 : 0.8,
+        contrast: 0.4,
         time: t,
       },
     };

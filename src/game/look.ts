@@ -17,6 +17,16 @@ export interface Look {
   crosshairColor: number;
   card: number;
   emblem: number;
+  skin: number;
+  build: number;
+  face: number;
+  eyewear: number;
+  gloves: number;
+  boots: number;
+  pack: number;
+  pads: number;
+  helmet: number;
+  sleeves: number;
 }
 
 export const VESTS: { name: string; rgb: RGB }[] = [
@@ -28,6 +38,10 @@ export const VESTS: { name: string; rgb: RGB }[] = [
   { name: 'Sand', rgb: [0.82, 0.7, 0.48] },
   { name: 'Graphite', rgb: [0.22, 0.23, 0.26] },
   { name: 'Ice', rgb: [0.75, 0.9, 1.0] },
+  { name: 'Ranger Green', rgb: [0.3, 0.36, 0.26] },
+  { name: 'Coyote', rgb: [0.55, 0.44, 0.3] },
+  { name: 'Black', rgb: [0.08, 0.08, 0.09] },
+  { name: 'Wolf Grey', rgb: [0.42, 0.44, 0.46] },
 ];
 /** Tints applied to the fabric material (values above 1 brighten the dark base cloth). */
 export const FATIGUES: { name: string; rgb: RGB }[] = [
@@ -37,8 +51,31 @@ export const FATIGUES: { name: string; rgb: RGB }[] = [
   { name: 'Night Black', rgb: [0.7, 0.7, 0.75] },
   { name: 'Navy', rgb: [0.9, 1.1, 1.9] },
   { name: 'Rust Brown', rgb: [2.0, 1.35, 1.0] },
+  { name: 'Ranger Green', rgb: [1.25, 1.45, 1.1] },
+  { name: 'Coyote Brown', rgb: [2.0, 1.6, 1.1] },
+  { name: 'Wolf Grey', rgb: [1.35, 1.4, 1.45] },
+  { name: 'Arctic White', rgb: [3.2, 3.2, 3.3] },
 ];
-export const HEADGEAR = ['Combat Helmet', 'Field Cap', 'Beanie', 'Hood', 'Bare Head'];
+export const HEADGEAR = ['Combat Helmet', 'Field Cap', 'Beanie', 'Hood', 'Bare Head', 'High-Cut Helmet & Headset', 'Boonie Hat', 'Bandana', 'Beret'];
+export const SKINS: { name: string; rgb: RGB }[] = [
+  { name: 'Porcelain', rgb: [1.25, 1.08, 0.98] }, { name: 'Fair', rgb: [1.15, 0.95, 0.82] }, { name: 'Olive', rgb: [0.98, 0.78, 0.6] },
+  { name: 'Tan', rgb: [0.85, 0.62, 0.45] }, { name: 'Brown', rgb: [0.6, 0.42, 0.3] }, { name: 'Deep', rgb: [0.38, 0.27, 0.2] },
+];
+export const BUILDS = ['Lean', 'Athletic', 'Heavy'];
+export const FACES = ['Clean Shaven', 'Stubble', 'Full Beard', 'Balaclava', 'Face Paint', 'Half Mask', 'Moustache'];
+export const EYEWEAR = ['None', 'Ballistic Goggles', 'Shades', 'Night Vision (raised)', 'Clear Glasses'];
+export const GLOVES: { name: string; rgb: RGB }[] = [
+  { name: 'Black', rgb: [0.5, 0.5, 0.5] }, { name: 'Coyote', rgb: [2.6, 2.0, 1.3] }, { name: 'Olive', rgb: [1.5, 1.7, 1.1] }, { name: 'Grey', rgb: [1.6, 1.6, 1.7] }, { name: 'Bare Hands', rgb: [0, 0, 0] },
+];
+export const BOOTS: { name: string; rgb: RGB }[] = [
+  { name: 'Black Leather', rgb: [0.45, 0.45, 0.45] }, { name: 'Desert Suede', rgb: [2.6, 2.1, 1.5] }, { name: 'Brown Leather', rgb: [1.5, 0.95, 0.6] }, { name: 'Grey Trail', rgb: [1.5, 1.5, 1.55] },
+];
+export const PACKS = ['None', 'Assault Pack', 'Radio Pack', 'Hydration Carrier', 'Rucksack'];
+export const PADS = ['None', 'Knee Pads', 'Knee & Elbow Pads'];
+export const HELMETS: { name: string; rgb: RGB }[] = [
+  { name: 'Olive', rgb: [0.55, 0.6, 0.45] }, { name: 'Coyote', rgb: [0.8, 0.68, 0.48] }, { name: 'Black', rgb: [0.14, 0.14, 0.15] }, { name: 'Grey', rgb: [0.5, 0.52, 0.55] }, { name: 'White', rgb: [0.9, 0.9, 0.88] }, { name: 'Navy', rgb: [0.15, 0.2, 0.35] },
+];
+export const SLEEVES = ['Long Sleeves', 'Rolled Sleeves', 'T-Shirt'];
 /** Camos and the material layer each one uses (-1: the gun's own finish). */
 export const CAMOS: { name: string; layer: number }[] = [
   { name: 'Factory Finish', layer: -1 },
@@ -83,11 +120,13 @@ export const EMBLEMS: { name: string; svg: string }[] = [
   { name: 'Shield', svg: '<path d="M12 2l8 3v6c0 5-3.4 9.4-8 11-4.6-1.6-8-6-8-11V5z"/>' },
 ];
 
-export const DEFAULT_LOOK: Look = { vest: 0, fatigues: 0, headgear: 0, camo: 0, reticle: 0, reticleColor: 0, crosshair: 0, crosshairColor: 5, card: 0, emblem: 0 };
+export const DEFAULT_LOOK: Look = { vest: 0, fatigues: 0, headgear: 0, camo: 0, reticle: 0, reticleColor: 0, crosshair: 0, crosshairColor: 5, card: 0, emblem: 0, skin: 1, build: 1, face: 0, eyewear: 1, gloves: 0, boots: 0, pack: 0, pads: 1, helmet: 0, sleeves: 0 };
 const RANGES: Record<keyof Look, number> = {
   vest: VESTS.length + 1, fatigues: FATIGUES.length, headgear: HEADGEAR.length, camo: CAMOS.length,
   reticle: RETICLES.length, reticleColor: COLORS.length, crosshair: CROSSHAIRS.length, crosshairColor: COLORS.length,
   card: CARDS.length, emblem: EMBLEMS.length,
+  skin: SKINS.length, build: BUILDS.length, face: FACES.length, eyewear: EYEWEAR.length, gloves: GLOVES.length, boots: BOOTS.length,
+  pack: PACKS.length, pads: PADS.length, helmet: HELMETS.length, sleeves: SLEEVES.length,
 };
 
 /** A valid look from anything (saved data, or another player's machine): bad fields take defaults. */

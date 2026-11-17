@@ -15,7 +15,7 @@ import { clientToken, GuestLobby, HostLobby, MODES, type KickReason, type LobbyS
 import { defaultRules, HEALTH_CHOICES, POINTS_CHOICES, RESPAWN_CHOICES, ROUND_CHOICES, rulesSummary, scoreChoices, TEAM_CSS, TEAM_NAMES, TIME_CHOICES, type Choice, type Rules } from './game/rules';
 import { codeFromUrl, normalizeCode, partyLink, setUrlCode } from './netcode/party';
 import { createTransport, NetError } from './netcode/transport';
-import { CAMOS, CARDS, cardHtml, COLORS, CROSSHAIRS, DEFAULT_LOOK, EMBLEMS, FATIGUES, HEADGEAR, loadLook, RETICLES, reticleSvg, saveLook, VESTS, type Look } from './game/look';
+import { BOOTS, BUILDS, EYEWEAR, FACES, GLOVES, HELMETS, PACKS, PADS, SKINS, SLEEVES, CAMOS, CARDS, cardHtml, COLORS, CROSSHAIRS, DEFAULT_LOOK, EMBLEMS, FATIGUES, HEADGEAR, loadLook, RETICLES, reticleSvg, saveLook, VESTS, type Look } from './game/look';
 import { matOffset } from './gfx/renderer';
 import { escapeHtml, Hud } from './ui/hud';
 import { LoadoutEditor } from './ui/loadout';
@@ -200,6 +200,16 @@ class App {
     fill('cz-vest', VESTS.map(v => v.name), l.vest, 1);
     fill('cz-fatigues', FATIGUES.map(f => f.name), l.fatigues);
     fill('cz-headgear', HEADGEAR, l.headgear);
+    fill('cz-helmet', HELMETS.map(h => h.name), l.helmet);
+    fill('cz-eyewear', EYEWEAR, l.eyewear);
+    fill('cz-face', FACES, l.face);
+    fill('cz-skin', SKINS.map(x => x.name), l.skin);
+    fill('cz-build', BUILDS, l.build);
+    fill('cz-sleeves', SLEEVES, l.sleeves);
+    fill('cz-gloves', GLOVES.map(x => x.name), l.gloves);
+    fill('cz-boots', BOOTS.map(x => x.name), l.boots);
+    fill('cz-pads', PADS, l.pads);
+    fill('cz-pack', PACKS, l.pack);
     fill('cz-camo', CAMOS.map(c => c.name), l.camo);
     fill('cz-reticle', RETICLES, l.reticle);
     fill('cz-reticleColor', COLORS.map(c => c.name), l.reticleColor);
@@ -283,7 +293,7 @@ class App {
     click('btn-customize', () => this.openCustomize('main'));
     click('btn-lobby-customize', () => this.openCustomize('lobby'));
     click('btn-customize-done', () => this.show(this.back));
-    for (const key of ['vest', 'fatigues', 'headgear', 'camo', 'reticle', 'reticleColor', 'crosshair', 'crosshairColor', 'card', 'emblem'] as (keyof Look)[]) {
+    for (const key of ['vest', 'fatigues', 'headgear', 'camo', 'reticle', 'reticleColor', 'crosshair', 'crosshairColor', 'card', 'emblem', 'helmet', 'eyewear', 'face', 'skin', 'build', 'sleeves', 'gloves', 'boots', 'pads', 'pack'] as (keyof Look)[]) {
       const sel = $<HTMLSelectElement>(`cz-${key}`);
       sel.onchange = () => this.setLook({ ...this.look, [key]: +sel.value });
     }
