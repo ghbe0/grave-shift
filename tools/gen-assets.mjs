@@ -50,11 +50,46 @@ function emit(part, mesh) {
     return mesh.pos.length / 3 - 1;
   };
   if (part.box) {
-    const s = part.box;
-    for (const [n, u, w] of FACES) {
-      const ids = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) =>
-        add([0, 1, 2].map(k => ((n[k] + u[k] * a + w[k] * b) / 2) * s[k]), n, (a + 1) / 2, (1 - b) / 2));
-      mesh.idx.push(ids[0], ids[1], ids[2], ids[0], ids[2], ids[3]);
+    // A bevelled block: each face is inset by the bevel, and the gaps along the edges and at the
+    // corners are bridged with faces that blend the neighbouring normals, so edges catch the light
+    // like machined or moulded parts instead of being knife-sharp.
+    const h = part.box.map(v => v / 2);
+    const bev = Math.min(Math.min(...part.box) * 0.22, 0.0035);
+    const vid = new Map();
+    const fv = (k, sk, sa, sb) => {
+      const key = `${k}${sk}${sa}${sb}`;
+      if (vid.has(key)) return vid.get(key);
+      const [a1, a2] = [0, 1, 2].filter(q => q !== k);
+      const pos = [0, 0, 0], n = [0, 0, 0];
+      pos[k] = sk * h[k]; n[k] = sk;
+      pos[a1] = sa * (h[a1] - bev); pos[a2] = sb * (h[a2] - bev);
+      const id = add(pos, n, (sa + 1) / 2, (sb + 1) / 2);
+      vid.set(key, id);
+      return id;
+    };
+    const P = id => [mesh.pos[id * 3], mesh.pos[id * 3 + 1], mesh.pos[id * 3 + 2]];
+    const N = id => [mesh.nrm[id * 3], mesh.nrm[id * 3 + 1], mesh.nrm[id * 3 + 2]];
+    // Emits a triangle, flipped if needed so it faces the way its vertex normals point.
+    const tri = (i, j, k) => {
+      const [a, b, c] = [P(i), P(j), P(k)];
+      const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+      const f = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+      const n = [N(i), N(j), N(k)].reduce((s, q) => [s[0] + q[0], s[1] + q[1], s[2] + q[2]], [0, 0, 0]);
+      if (f[0] * n[0] + f[1] * n[1] + f[2] * n[2] < 0) mesh.idx.push(i, k, j); else mesh.idx.push(i, j, k);
+    };
+    const quad = (a, b, c, d) => { tri(a, b, c); tri(a, c, d); };
+    for (let k = 0; k < 3; k++) for (const sk of [-1, 1]) quad(fv(k, sk, -1, -1), fv(k, sk, 1, -1), fv(k, sk, 1, 1), fv(k, sk, -1, 1));
+    // Edges: faces k and m meet; l is the third axis.
+    const other = (k, m) => [0, 1, 2].find(q => q !== k && q !== m);
+    const corner = (k, sk, signs) => { const [a1, a2] = [0, 1, 2].filter(q => q !== k); return fv(k, sk, signs[a1], signs[a2]); };
+    for (let k = 0; k < 3; k++) for (let m = k + 1; m < 3; m++) for (const sk of [-1, 1]) for (const sm of [-1, 1]) {
+      const l = other(k, m);
+      const sg = l2 => { const s3 = [0, 0, 0]; s3[k] = sk; s3[m] = sm; s3[l] = l2; return s3; };
+      quad(corner(k, sk, sg(-1)), corner(k, sk, sg(1)), corner(m, sm, sg(1)), corner(m, sm, sg(-1)));
+    }
+    for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
+      const sg = [sx, sy, sz];
+      tri(corner(0, sx, sg), corner(1, sy, sg), corner(2, sz, sg));
     }
   } else {
     const [r, len] = part.cyl, seg = part.seg ?? 14;
