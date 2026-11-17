@@ -243,3 +243,9 @@ body.touch-play #objective { top: 86px; transform: translateX(-50%) scale(0.8); 
 .lo-options.weapons { grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
 .lo-options h4 { grid-column: 1 / -1; margin: 8px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--dim); border-bottom: 1px solid var(--line); padding-bottom: 3px; }
 @media (max-width: 720px) { .lo-group { grid-column: span 12; } .lo-tile { width: 88px; } }
+
+/* Key bindings list. */
+#binds { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px 14px; }
+#binds .bind { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--text); font-size: 13px; }
+#binds button { min-width: 108px; padding: 4px 8px; font-size: 12px; }
+#binds button.listening { border-color: var(--accent); color: var(--accent); }

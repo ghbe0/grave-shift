@@ -230,6 +230,13 @@ export class Session {
     return { pos, yaw: this.yaw, pitch: this.pitch, roll: (s[P['ctl.roll']] ?? 0) + (downed ? 0.35 : 0), fov: this.fovBase + (s[P['ctl.fov']] ?? 0) };
   }
 
+  /** Where our own feet are this frame (interpolated between ticks, like the camera). */
+  feet(): [number, number, number] {
+    const a = this.acc / TICK;
+    const err = this.predictor?.error ?? [0, 0, 0];
+    return [0, 1, 2].map(k => this.prevPos[k] + (this.curPos[k] - this.prevPos[k]) * a + err[k]) as [number, number, number];
+  }
+
   /** Other players, interpolated on guests. */
   players(): Pose[] {
     const { P } = this.sim.L;

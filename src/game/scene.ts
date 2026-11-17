@@ -47,7 +47,7 @@ interface Tracer { a: number[]; b: number[]; t: number; color: RGB }
 interface Flash { pos: number[]; t: number; life: number; color: RGB; radius: number; size: number; glow?: number; vel?: number[]; rise?: number }
 interface LightSrc { pos: number[]; radius: number; color: RGB; intensity: number; flicker?: number }
 
-export interface SceneSettings { fov: number; motionBlur: boolean; dof: boolean }
+export interface SceneSettings { fov: number; motionBlur: boolean; dof: boolean; /** 0 first person .. 1 third person. */ third?: number }
 
 /** A character's facing frame: positions are given as (right, up, forward) offsets. */
 function frame(x: number, y: number, z: number, yaw: number) {
@@ -710,6 +710,12 @@ export class Scene {
     this.corpses = this.corpses.filter(c => c.t < 6.5);
     if (this.zanim.size > 200) for (const [id, a] of this.zanim) if (t - a.seen > 10) this.zanim.delete(id);
     for (const p of s.players()) if (p.rec[P.life] !== 2) this.survivor(round, glows, groups, p, t);
+    // Third person: our own body is drawn like anyone else's, where our feet are.
+    const third = (settings.third ?? 0) > 0.25;
+    if (third && me.length && me[P.life] !== 2) {
+      const f = s.feet();
+      this.survivor(round, glows, groups, { id: s.selfId, x: f[0], y: f[1], z: f[2], yaw: view.yaw, rec: me }, t);
+    }
 
     // Power-ups, grenades and lingering effects.
     const puff = t - this.smokeAt >= 0.025 || t < this.smokeAt;
@@ -804,7 +810,7 @@ export class Scene {
     // First-person weapon and arms: sway lags the look, bob follows the stride, kick decays after each shot.
     const alive = me[P.life] === 0;
     const vm = this.vm;
-    if (alive && gunId >= 0) {
+    if (alive && gunId >= 0 && !third) {
       const dyaw = view.yaw - this.lastAngles[0], dpitch = view.pitch - this.lastAngles[1];
       this.sway[0] += (Math.max(-0.06, Math.min(0.06, dyaw * 0.6)) - this.sway[0]) * Math.min(1, dt * 10);
       this.sway[1] += (Math.max(-0.06, Math.min(0.06, dpitch * 0.6)) - this.sway[1]) * Math.min(1, dt * 10);

@@ -3,6 +3,7 @@ import { Sfx } from './audio/sfx';
 import { loadSim } from './core/load';
 import { WF, type Sim } from './core/sim';
 import { Input } from './engine/input';
+import { ACTIONS, defaultBinds, keyName, rebind, saveBinds } from './engine/binds';
 import { Ticker } from './engine/ticker';
 import { isTouchDevice, TouchControls } from './engine/touch';
 import { Scene } from './game/scene';
@@ -79,6 +80,7 @@ class App {
   private session: Session | null = null;
   private scene: Scene | null = null;
   private lastFoot = 0;
+  private third = 0;
   private screen = 'loading';
   private back = 'main';
   private last = performance.now();
@@ -289,6 +291,8 @@ class App {
     click('btn-lobby-loadout', () => this.openLoadout('lobby'));
     click('btn-loadout-done', () => { if (this.editor.check()) this.show(this.back); });
     click('btn-loadout-reset', () => this.editor.reset());
+    click('btn-binds-reset', () => { this.input.binds = defaultBinds(); saveBinds(this.input.binds); this.input.applyBinds(); this.renderBinds(); });
+    this.renderBinds();
     click('btn-settings', () => this.openSettings('main'));
     click('btn-pause-settings', () => this.openSettings('pause'));
     click('btn-settings-done', () => this.show(this.back));
@@ -560,6 +564,40 @@ class App {
     if (box.dataset.html !== html) { box.dataset.html = html; box.innerHTML = html; }
   }
 
+  /** The key bindings list in Settings: click one, then press the new key or mouse button. */
+  private renderBinds(): void {
+    const box = $('binds');
+    box.replaceChildren();
+    for (const a of ACTIONS) {
+      const row = document.createElement('label');
+      row.className = 'bind';
+      row.textContent = a.label;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.dataset.bind = a.id;
+      b.textContent = keyName(this.input.binds[a.id]);
+      b.onclick = e => {
+        e.preventDefault();
+        b.textContent = 'Press a key...';
+        b.classList.add('listening');
+        this.input.capturing = true;
+        const done = (code: string | null) => {
+          removeEventListener('keydown', onKey, true);
+          removeEventListener('mousedown', onMouse, true);
+          this.input.capturing = false;
+          if (code) { rebind(this.input.binds, a.id, code); saveBinds(this.input.binds); this.input.applyBinds(); }
+          this.renderBinds();
+        };
+        const onKey = (ev: KeyboardEvent) => { ev.preventDefault(); ev.stopPropagation(); done(ev.code === 'Escape' ? null : ev.code); };
+        const onMouse = (ev: MouseEvent) => { ev.preventDefault(); ev.stopPropagation(); done(`Mouse${ev.button}`); };
+        // Listen from the next tick so this very click is not taken as the new binding.
+        setTimeout(() => { addEventListener('keydown', onKey, true); addEventListener('mousedown', onMouse, true); }, 0);
+      };
+      row.append(b);
+      box.append(row);
+    }
+  }
+
   private startParty(): void {
     if (!this.host) return;
     this.host.setLoadout(this.editor.loadout);
@@ -617,7 +655,7 @@ class App {
     document.body.classList.toggle('touch', on);
     $('controls-hint').textContent = on
       ? 'Left thumb: joystick (push all the way forward to sprint). Right thumb: drag to look; hold FIRE and drag to aim while shooting. AIM toggles aiming down sights.'
-      : 'WASD move · Shift sprint · C slide · Space jump, hold to thrust · run along walls · Mouse fire/aim · R reload · F use · Q ability · G/E equipment · V melee · Z tonic · Tab scores';
+      : 'WASD move · Shift sprint · C slide · Space jump, hold to thrust · run along walls · Mouse fire/aim · R reload · F use · Q ability · G/E equipment · V melee · Z tonic · hold T third person · Tab scores (all rebindable in Settings)';
   }
 
   private sound(e: Float32Array): void {
@@ -751,7 +789,20 @@ class App {
       if (foot !== this.lastFoot) { this.lastFoot = foot; this.sfx.step(!!me[P['ctl.sprinting']]); }
     }
     const view = s.view(this.settings.fov);
-    const frame = this.scene.build(view, dt, this.canvas.width / this.canvas.height, { fov: this.settings.fov, motionBlur: this.settings.blur, dof: this.settings.dof });
+    // Third person while the key is held: the camera eases out over the right shoulder (stopping
+    // short of walls) and back in again on release.
+    this.third += ((this.input.thirdPerson ? 1 : 0) - this.third) * Math.min(1, dt * 9);
+    if (this.third > 0.01) {
+      const k = this.third;
+      const dir = [Math.sin(view.yaw) * Math.cos(view.pitch), -Math.sin(view.pitch), Math.cos(view.yaw) * Math.cos(view.pitch)]; // backwards
+      const right = [Math.cos(view.yaw), 0, -Math.sin(view.yaw)];
+      const off = [dir[0] * 3.1 + right[0] * 0.55, dir[1] * 3.1 + 0.35, dir[2] * 3.1 + right[2] * 0.55];
+      const len = Math.hypot(off[0], off[1], off[2]);
+      const free = Math.max(0.3, s.game.raycast(view.pos, off.map(v => v / len), len + 0.3) - 0.3);
+      const reach = (Math.min(len, free) / len) * k;
+      view.pos = [view.pos[0] + off[0] * reach, view.pos[1] + off[1] * reach, view.pos[2] + off[2] * reach];
+    }
+    const frame = this.scene.build(view, dt, this.canvas.width / this.canvas.height, { fov: this.settings.fov, motionBlur: this.settings.blur, dof: this.settings.dof, third: this.third });
     this.renderer.render(frame);
     // The HUD is DOM text: refreshing it faster than 60 Hz costs time and shows nothing new.
     if (now - this.lastHud >= 16) {

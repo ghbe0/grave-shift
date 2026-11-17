@@ -3,12 +3,7 @@
 import { Btn } from '../core/sim';
 import type { TouchControls } from './touch';
 
-const KEYS: Record<string, number> = {
-  Space: Btn.jump, ShiftLeft: Btn.sprint, ShiftRight: Btn.sprint, KeyC: Btn.crouch, ControlLeft: Btn.crouch,
-  KeyR: Btn.reload, KeyF: Btn.use, KeyV: Btn.melee, KeyQ: Btn.ability, KeyX: Btn.swap, KeyZ: Btn.tonic,
-  KeyG: Btn.lethal, KeyE: Btn.tactical, Digit4: Btn.streak1, Digit5: Btn.streak2, Digit6: Btn.streak3,
-};
-const MOUSE = [Btn.fire, Btn.melee, Btn.ads];
+import { ACTIONS, loadBinds, type Binds } from './binds';
 
 export class Input {
   private keyButtons = 0;
@@ -25,28 +20,43 @@ export class Input {
   private dx = 0;
   private dy = 0;
   onUnlock: () => void = () => {};
+  /** Current key bindings (action id -> key or mouse-button code). */
+  binds: Binds = loadBinds();
+  /** While true, key and mouse presses are being captured by the settings screen. */
+  capturing = false;
+  /** Held while the third-person key is down. */
+  thirdPerson = false;
+  private act = new Map<string, { id: string; btn?: number }>();
+
+  /** Rebuilds the key lookup after bindings change. */
+  applyBinds(): void {
+    this.act.clear();
+    for (const a of ACTIONS) this.act.set(this.binds[a.id], { id: a.id, btn: a.btn });
+  }
+  private press(code: string, down: boolean): void {
+    const a = this.act.get(code);
+    if (!a) return;
+    if (a.btn) { if (down) { this.keyButtons |= a.btn; this.latched |= a.btn; } else this.keyButtons &= ~a.btn; }
+    if (down) this.keys.add(a.id); else this.keys.delete(a.id);
+    if (a.id === 'weapon1' && down) this.slot = 0;
+    if (a.id === 'weapon2' && down) this.slot = 1;
+    if (a.id === 'scores') this.scoreboard = down;
+    if (a.id === 'third') this.thirdPerson = down;
+  }
 
   constructor(private canvas: HTMLCanvasElement) {
+    this.applyBinds();
     addEventListener('keydown', e => {
-      if (!this.locked) return;
+      if (!this.locked || this.capturing) return;
       e.preventDefault();
-      this.keys.add(e.code);
-      if (KEYS[e.code]) { this.keyButtons |= KEYS[e.code]; this.latched |= KEYS[e.code]; }
-      if (e.code === 'Digit1') this.slot = 0;
-      if (e.code === 'Digit2') this.slot = 1;
-      if (e.code === 'Tab') this.scoreboard = true;
+      if (!e.repeat) this.press(e.code, true);
     });
-    addEventListener('keyup', e => {
-      this.keys.delete(e.code);
-      if (KEYS[e.code]) this.keyButtons &= ~KEYS[e.code];
-      if (e.code === 'Tab') this.scoreboard = false;
-    });
+    addEventListener('keyup', e => this.press(e.code, false));
     addEventListener('mousedown', e => {
-      if (!this.locked || this.engaged) return;
-      this.keyButtons |= MOUSE[e.button] ?? 0;
-      this.latched |= MOUSE[e.button] ?? 0;
+      if (!this.locked || this.engaged || this.capturing) return;
+      this.press(`Mouse${e.button}`, true);
     });
-    addEventListener('mouseup', e => { this.keyButtons &= ~(MOUSE[e.button] ?? 0); });
+    addEventListener('mouseup', e => this.press(`Mouse${e.button}`, false));
     addEventListener('mousemove', e => {
       // Chrome can report one huge jump right after the pointer locks; no real flick is 300 px in one event.
       if (this.locked && Math.abs(e.movementX) < 300 && Math.abs(e.movementY) < 300) { this.dx += e.movementX; this.dy += e.movementY; }
@@ -89,12 +99,12 @@ export class Input {
     }
     if (document.pointerLockElement === this.canvas) document.exitPointerLock();
   }
-  private reset(): void { this.keyButtons = this.latched = 0; this.keys.clear(); this.dx = this.dy = 0; this.scoreboard = false; }
+  private reset(): void { this.keyButtons = this.latched = 0; this.keys.clear(); this.dx = this.dy = 0; this.scoreboard = false; this.thirdPerson = false; }
 
   /** Strafe and forward axes, each -1..1. */
   move(): [number, number] {
     const k = (c: string) => (this.keys.has(c) ? 1 : 0);
-    let x = k('KeyD') - k('KeyA'), z = k('KeyW') - k('KeyS');
+    let x = k('right') - k('left'), z = k('forward') - k('back');
     if (this.engaged && this.touch) {
       x += this.touch.axis[0];
       z += this.touch.axis[1];
