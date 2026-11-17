@@ -208,10 +208,16 @@ await check('phone: touch joystick, look, fire, pause', async () => {
   await page.waitForSelector('#screen-main:not([hidden])');
   const setup = await page.evaluate(() => ({ touch: document.body.classList.contains('touch'), textures: window.app.settings.textures, scale: window.app.settings.renderScale }));
   if (!setup.touch) throw new Error('phone not detected as a touch device');
+  // Solo setup with picture tiles: Free-for-All (no zombies) on Mill Street, so slow software
+  // rendering can't let the undead end the match before every control has been tried.
   await page.tap('#btn-solo');
+  await page.tap('#lobby-mode + .picker [data-v="1"]');
+  await page.tap('#lobby-map + .picker [data-v="2"]');
   await page.tap('#btn-solo-go');
   await page.tap('#btn-loadout-done');
   await page.waitForFunction(() => window.app.session?.snap && window.app.input.touchEngaged && !document.getElementById('touch').hidden);
+  const chosen = await page.evaluate(() => [window.app.session.start.mode, window.app.session.start.map]);
+  if (chosen.join() !== '1,2') throw new Error(`solo setup started mode/map ${chosen}`);
   const me = () => page.evaluate(() => {
     const a = window.app, s = a.session, P = a.sim.L.P, m = s.local();
     return { x: m[P['ctl.pos']], z: m[P['ctl.pos'] + 2], yaw: s.yaw, ammo: m[P[`arms.guns${m[P['arms.cur']]}.ammo`]] };
