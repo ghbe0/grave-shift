@@ -227,6 +227,13 @@ export function bodyParts(): Record<string, MeshData> {
       { y: 0.25, rx: 0.44, rz: 0.3, p: 3, dz: -0.05 }, // ball of the foot
       { y: 0.5, rx: 0.32, rz: 0.2, p: 2.6, dz: -0.1 }, // toe cap
     ], 18, 12),
+    // A smooth ball, for the rounded masses that join parts: deltoids, elbows, knees, the seat.
+    ball: sculpt(() => 1, 14, 20),
+    // Across the hips, left (y -0.5) to right: the pelvis and seat that join the legs to the torso.
+    pelvis: loft([
+      { y: -0.5, rx: 0.34, rz: 0.36 }, { y: -0.3, rx: 0.46, rz: 0.48, back: 0.06 }, { y: 0, rx: 0.42, rz: 0.46, back: 0.05 },
+      { y: 0.3, rx: 0.46, rz: 0.48, back: 0.06 }, { y: 0.5, rx: 0.34, rz: 0.36 },
+    ], 18, 12),
     head: headMesh(0),
     headDead: headMesh(1),
     gear: gearMesh(),

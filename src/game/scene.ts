@@ -703,6 +703,10 @@ export class Scene {
       const sole = Math.max(ankle[1] - 0.05, p.y + 0.045);
       this.seg('shin', [ankle[0], ankle[1] + 0.06, ankle[2]], [ankle[0], sole + 0.04, ankle[2]], 0.062, boot, MAT.fabric, 0.066, right);
       this.seg('boot', [ankle[0] - fwd[0] * 0.07, sole + 0.02, ankle[2] - fwd[2] * 0.07], [ankle[0] + fwd[0] * 0.19, sole + 0.02, ankle[2] + fwd[2] * 0.19], 0.058, boot, MAT.fabric, 0.07, right);
+      // Knee joint, trousers bloused over the boot top, laces.
+      this.put('ball', knee[0], knee[1], knee[2], 0.15 * bulk, 0.15, 0.15 * bulk, fatigues, MAT.fabric, 0, 0, p.yaw);
+      this.put('ball', ankle[0], ankle[1] + 0.1, ankle[2], 0.15, 0.09, 0.16, fatigues, MAT.fabric, 0, 0, p.yaw);
+      for (let l = 0; l < 3; l++) this.put('gear', ankle[0] + fwd[0] * (0.05 + l * 0.035), sole + 0.07 - l * 0.012, ankle[2] + fwd[2] * (0.05 + l * 0.035), 0.06, 0.008, 0.012, [0.08, 0.08, 0.08], MAT.fabric, 0, 0, p.yaw);
       this.put('gear', ankle[0] + fwd[0] * 0.065, sole - 0.03, ankle[2] + fwd[2] * 0.065, 0.1, 0.03, 0.29, [0.25, 0.25, 0.25], MAT.polymer, 0, 0, p.yaw);
     }
     // Spine: leans into a run and bends with the aim.
@@ -715,6 +719,9 @@ export class Scene {
     void chestL;
     // One sculpted torso from the hips to the base of the neck, leaning with the spine.
     this.seg('torso', at(0, hip - 0.1, 0), at(sway, chestL[1] + 0.13, chestL[2] + 0.01), 0.205 * bulk, fatigues, MAT.fabric, 0.14 * bulk, right);
+    // Pelvis and seat join the thighs to the torso; a collar joins the neck.
+    this.seg('pelvis', at(-0.16, hip - 0.03, 0), at(0.16, hip - 0.03, 0), 0.11 * bulk, fatigues, MAT.fabric, 0.12, [0, 1, 0]);
+    this.put('ball', ...at(sway, chestL[1] + 0.12, chestL[2] + 0.01), 0.17, 0.07, 0.15, fatigues, MAT.fabric, 0, 0, p.yaw, -bend);
     void pelvis; void waist;
     // Belt, holster and pouches.
     this.put('gear', ...at(0, hip + 0.06, 0), 0.36 * bulk, 0.055, 0.27, [0.35, 0.33, 0.3], MAT.fabric, 0, 0, p.yaw);
@@ -744,7 +751,7 @@ export class Scene {
     const neck = at(sway, chestL[1] + 0.13, chestL[2] + 0.02);
     const headL: [number, number, number] = [sway, chestL[1] + 0.27, chestL[2] + 0.04 + Math.sin(-hp) * 0.02];
     const head = at(...headL);
-    this.seg('neck', neck, at(headL[0], headL[1] - 0.09, headL[2] - 0.01), 0.055, skin, MAT.skin, 0.055, right);
+    this.seg('neck', neck, at(headL[0], headL[1] - 0.09, headL[2] - 0.01), 0.062, skin, MAT.skin, 0.062, right);
     const masked = look.face === 3;
     const faceTint: RGB = masked ? [0.35, 0.35, 0.36] : skin;
     this.put('head', head[0], head[1], head[2], 0.205, 0.255, 0.235, faceTint, masked ? MAT.fabric : MAT.skin, 0, 0, p.yaw, hp);
@@ -813,14 +820,25 @@ export class Scene {
     for (const [sd, hand] of [[1, grip], [-1, fore]] as const) {
       const sh = at(sd * 0.215, chestL[1] + 0.02, chestL[2]);
       const el: V3 = [(sh[0] + hand[0]) / 2 + right[0] * sd * 0.09, (sh[1] + hand[1]) / 2 - 0.15, (sh[2] + hand[2]) / 2 + right[2] * sd * 0.09 - fwd[2] * 0.03];
+      // Deltoid joining the arm to the shoulder, and the elbow joint.
+      this.put('ball', sh[0], sh[1] - 0.01, sh[2], 0.16 * bulk, 0.15, 0.15 * bulk, fatigues, MAT.fabric, 0, 0, p.yaw);
+      this.put('ball', el[0], el[1], el[2], 0.11 * bulk, 0.11, 0.11 * bulk, bare || rolled ? skin : fatigues, bare || rolled ? MAT.skin : MAT.fabric, 0, 0, p.yaw);
       this.seg('upperArm', sh, el, 0.065 * bulk, bare ? skin : fatigues, bare ? MAT.skin : MAT.fabric, 0.063 * bulk, right);
       if (bare) this.seg('upperArm', sh, [(sh[0] * 2 + el[0]) / 3, (sh[1] * 2 + el[1]) / 3, (sh[2] * 2 + el[2]) / 3], 0.072 * bulk, fatigues, MAT.fabric, 0.07 * bulk, right);
       this.seg('forearm', el, hand as V3, 0.052 * bulk, bare || rolled ? skin : fatigues, bare || rolled ? MAT.skin : MAT.fabric, 0.048 * bulk, right);
       if (look.pads === 2) this.put('gear', el[0], el[1], el[2], 0.11, 0.12, 0.11, [0.5, 0.5, 0.5], MAT.polymer);
       // Hand: palm, thumb and fingers wrapped round the weapon.
       const hd = [hand[0] - el[0], hand[1] - el[1], hand[2] - el[2]], hl = Math.hypot(hd[0], hd[1], hd[2]) || 1;
-      this.seg('hand', [hand[0] - (hd[0] / hl) * 0.04, hand[1] - (hd[1] / hl) * 0.04, hand[2] - (hd[2] / hl) * 0.04], [hand[0] + (hd[0] / hl) * 0.1, hand[1] + (hd[1] / hl) * 0.1, hand[2] + (hd[2] / hl) * 0.1], 0.048, glove, gloveMat, 0.03, right);
+      const wrist: V3 = [hand[0] - (hd[0] / hl) * 0.04, hand[1] - (hd[1] / hl) * 0.04, hand[2] - (hd[2] / hl) * 0.04];
+      if (look.gloves !== 4) this.seg('forearm', wrist, [wrist[0] - (hd[0] / hl) * 0.05, wrist[1] - (hd[1] / hl) * 0.05, wrist[2] - (hd[2] / hl) * 0.05], 0.048 * bulk, glove, gloveMat, 0.044 * bulk, right); // glove cuff
+      this.seg('hand', wrist, [hand[0] + (hd[0] / hl) * 0.08, hand[1] + (hd[1] / hl) * 0.08, hand[2] + (hd[2] / hl) * 0.08], 0.046, glove, gloveMat, 0.028, right);
     }
+    // Fingers wrapped round the grip and the handguard, as in first person.
+    const g3 = (x: number, y: number, z: number) => transformPoint(gm, [x, y, z]) as V3;
+    const fing = (pts: V3[], r: number) => { for (let i = 0; i < pts.length - 1; i++) out.limb(pts[i], pts[i + 1], r, glove, gloveMat); };
+    for (let k = 0; k < 3; k++) { const y = -0.035 - k * 0.022; fing([g3(0.025, y, 0.02), g3(0.022, y - 0.004, -0.012), g3(-0.012, y - 0.006, -0.012)], 0.0095); }
+    fing([g3(0.024, -0.008, 0.012), g3(0.022, -0.012, -0.02), g3(0.004, -0.016, -0.026)], 0.009);
+    if (a.reload < 0.3) for (let k = 0; k < 4; k++) { const z = foreZ - 0.03 + k * 0.019; fing([g3(0.004, 0.014, z), g3(0.026, 0.03, z), g3(0.028, 0.06, z)], 0.009); }
     if (p.rec[P.shield] > 0) this.put('gear', ...at(0, chestL[1] - 0.1, chestL[2] - 0.3), 0.6, 0.8, 0.06, [0.8, 0.8, 0.8], MAT.rust, 0, 0, p.yaw);
     void neck;
   }
