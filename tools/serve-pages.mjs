@@ -11,7 +11,7 @@ const root = new URL('../dist/', import.meta.url).pathname;
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.wasm': 'application/wasm', '.glb': 'model/gltf-binary', '.json': 'application/json', '.map': 'application/json',
-  '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
 };
 
 createServer(async (req, res) => {

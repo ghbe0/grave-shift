@@ -27,9 +27,10 @@ input, select, button { font: inherit; color: var(--text); background: #141b25; 
 input[type="range"] { padding: 0; }
 input[type="checkbox"] { width: 18px; height: 18px; flex: none; }
 input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-button { cursor: pointer; font-weight: 600; transition: background 0.15s, border-color 0.15s, transform 0.12s, box-shadow 0.15s; }
-button:hover { background: #1c2633; border-color: #35506f; }
-button:active { transform: scale(0.97); }
+button { cursor: pointer; font-weight: 600; }
+#menu button { transition: background 0.15s, border-color 0.15s, transform 0.12s, box-shadow 0.15s; }
+#menu button:hover { background: #1c2633; border-color: #35506f; }
+#menu button:active { transform: scale(0.97); }
 button.primary { background: linear-gradient(180deg, #4aa6ff, #1f6fd1); border-color: #5fb0ff; color: #fff; text-shadow: 0 1px 0 #0006; }
 button.primary:hover { background: linear-gradient(180deg, #67b6ff, #2a7fe4); }
 button:disabled { opacity: 0.45; cursor: default; }
