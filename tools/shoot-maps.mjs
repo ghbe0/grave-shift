@@ -20,7 +20,7 @@ for (const m of only) {
     await page.goto(`${SITE}?${q}`);
     await page.waitForFunction(() => window.app?.shotView, null, { timeout: 120000 });
     await page.evaluate(() => window.app.materials);
-    await page.waitForFunction(() => window.app.shotUrl, null, { timeout: 900000, polling: 1000 });
+    await page.waitForFunction(() => window.app.shotUrl, null, { timeout: 2400000, polling: 1000 });
     const url = await page.evaluate(() => window.app.shotUrl);
     writeFileSync(`public/assets/maps/${m}${suffix}.jpg`, Buffer.from(url.split(',')[1], 'base64'));
     console.log('shot', m, suffix || 'wide', await page.evaluate(() => JSON.stringify(window.app.shotView)));
