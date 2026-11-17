@@ -29,12 +29,35 @@ out vec3 vWorld; out vec3 vNormal; out vec2 vUv; out vec4 vColor; flat out vec4 
 flat out vec3 vN0; flat out vec3 vN1; flat out vec3 vN2;
 void main() {
   vec3 world = m0.xyz * aPos.x + m1.xyz * aPos.y + m2.xyz * aPos.z + m3.xyz;
-  if ((int(aParams.w) & 8) != 0) {
-    // Foliage sways: a slow lean that grows with height plus a quick flutter.
-    float t = uGrade.w, lean = clamp(world.y * 0.22, 0.0, 1.4) * 0.05;
-    vec2 slow = vec2(sin(t * 1.3 + world.x * 0.7 + world.z * 0.5), cos(t * 1.05 + world.z * 0.6 - world.x * 0.4));
-    vec2 quick = vec2(sin(t * 4.3 + world.y * 3.1 + world.x * 2.3), cos(t * 3.7 + world.y * 2.7 + world.z * 2.9)) * 0.007;
-    world.xz += slow * lean + quick;
+  int fl = int(aParams.w);
+  if ((fl & 184) != 0) {
+    // Wind (see scene.wgsl): gusts roll across the map; grass bends from the root, foliage leans
+    // and flutters, cloth ripples from its pinned edge, cables swing at mid-span.
+    float t = uGrade.w;
+    vec2 W = vec2(0.8, 0.6), base = m3.xz;
+    float along = dot(base, W);
+    float gust = 0.55 + 0.45 * sin(along * 0.12 - t * 1.1) * sin(along * 0.05 + base.y * 0.03 - t * 0.37 + 1.3);
+    if ((fl & 16) != 0) {
+      float h = max(aPos.y, 0.0);
+      float flutter = sin(t * 3.1 + base.x * 1.7 + base.y * 1.3 + aPos.x * 4.0) * 0.08;
+      float bend = h * h * length(m1.xyz) * (0.38 * gust + flutter);
+      world.xz += W * bend; world.y -= bend * bend * 0.6;
+    } else if ((fl & 8) != 0) {
+      float lean = clamp(world.y * 0.22, 0.0, 1.4) * (0.025 + 0.06 * gust);
+      vec2 slow = vec2(sin(t * 1.3 + world.x * 0.7 + world.z * 0.5), cos(t * 1.05 + world.z * 0.6 - world.x * 0.4));
+      vec2 quick = vec2(sin(t * 4.3 + world.y * 3.1 + world.x * 2.3), cos(t * 3.7 + world.y * 2.7 + world.z * 2.9)) * (0.004 + 0.012 * gust);
+      world += vec3(W.x * lean + slow.x * lean * 0.5 + quick.x, quick.x * 0.5, W.y * lean + slow.y * lean * 0.5 + quick.y);
+    }
+    if ((fl & 32) != 0) {
+      float wave = sin(aPos.x * 7.0 - t * 6.0 + base.x) * 0.6 + sin(aPos.x * 13.0 + aPos.y * 5.0 - t * 9.0) * 0.25;
+      world += normalize(m2.xyz) * wave * (aPos.x + 0.5) * length(m0.xyz) * 0.09 * (0.5 + gust);
+    }
+    if ((fl & 128) != 0) {
+      float sag = 1.0 - 4.0 * aPos.y * aPos.y;
+      float span = length(m1.xyz);
+      world.y -= sag * span * 0.05;
+      world += normalize(m2.xyz) * sin(t * 1.6 + base.x * 0.3) * (0.03 + 0.012 * span) * sag * (0.4 + gust);
+    }
   }
   vN0 = m0.xyz / dot(m0.xyz, m0.xyz); vN1 = m1.xyz / dot(m1.xyz, m1.xyz); vN2 = m2.xyz / dot(m2.xyz, m2.xyz);
   vNormal = vN0 * aNormal.x + vN1 * aNormal.y + vN2 * aNormal.z;
@@ -82,6 +105,8 @@ vec3 brdf(vec3 n, vec3 v, vec3 l, vec3 albedo, float metallic, float rough) {
   float D = a2 / (PI * d * d), G = (nv / (nv * (1.0 - k) + k)) * (nl / (nl * (1.0 - k) + k));
   return ((1.0 - f) * (1.0 - metallic) * albedo / PI + D * G * f / (4.0 * nv * nl + 1e-3)) * nl;
 }
+float vhash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float vnoise(vec2 p) { vec2 i = floor(p), f = fract(p), u = f * f * (3.0 - 2.0 * f); return mix(mix(vhash(i), vhash(i + vec2(1, 0)), u.x), mix(vhash(i + vec2(0, 1)), vhash(i + vec2(1, 1)), u.x), u.y); }
 vec3 unpackN(vec4 d) { vec2 xy = d.xy * 2.0 - 1.0; return vec3(xy, sqrt(max(1.0 - dot(xy, xy), 0.0))); }
 void main() {
   if (uShadowPass) { outColor = vec4(1.0); return; }
@@ -109,6 +134,24 @@ void main() {
     n = normalize(vN0 * pn.x + vN1 * pn.y + vN2 * pn.z);
     // Leaves: the gaps between them (marked by low occlusion in the leaf material) are cut away.
     if ((flags & 8) != 0 && ao < 0.3) discard;
+  }
+  if ((flags & 16) != 0) albedo *= mix(vec3(0.35, 0.38, 0.32), vec3(1.25, 1.22, 0.95), 1.0 - vUv.y);
+  if ((flags & 64) != 0) {
+    float t = uGrade.w; vec2 q = vWorld.xz;
+    vec2 rip = vec2(sin(q.x * 9.0 + t * 2.3) + sin(q.x * 4.1 - q.y * 6.3 + t * 1.7), sin(q.y * 8.3 - t * 2.1) + sin(q.y * 3.7 + q.x * 5.9 + t * 1.3));
+    n = normalize(vec3(rip.x * 0.035, 1.0, rip.y * 0.035)); albedo = vec3(0.3, 0.34, 0.38); rough = 0.04; metallic = 0.85;
+  }
+  if ((flags & 74) == 0) {
+    float big = vnoise(vWorld.xz * 0.09 + vWorld.y * 0.05) * 0.6 + vnoise(vWorld.xz * 0.31) * 0.4;
+    albedo *= 0.74 + 0.5 * big;
+    float upf = max(normalize(vNormal).y, 0.0);
+    float dirt = smoothstep(0.45, 0.8, vnoise(vWorld.xz * 0.21 + vec2(13.0, 7.0))) * upf;
+    albedo = mix(albedo, albedo * vec3(0.62, 0.55, 0.45), dirt * 0.7);
+    float damp = smoothstep(0.6, 0.85, vnoise(vWorld.xz * 0.13 + vec2(3.0, 41.0))) * upf;
+    albedo *= 1.0 - damp * 0.35;
+    rough *= 1.0 - damp * 0.55;
+    float vert = 1.0 - abs(normalize(vNormal).y);
+    ao *= mix(1.0, 0.55 + 0.45 * smoothstep(0.0, 0.9, vWorld.y), vert);
   }
   rough = clamp(rough, 0.05, 1.0);
   if (dot(n, v) < 0.0) n = normalize(n + v * (0.01 - dot(n, v)));

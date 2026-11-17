@@ -34,7 +34,10 @@ const PERK_COLORS: RGB[] = [[0.9, 0.2, 0.15], [0.2, 0.85, 0.3], [1, 0.65, 0.1], 
 const POWERUP_COLORS: RGB[] = [[0.2, 1, 0.3], [1, 0.2, 0.2], [1, 0.85, 0.1], [0.9, 0.9, 1], [0.3, 0.6, 1]];
 export const PLAYER_COLORS: RGB[] = [[0.2, 0.55, 1], [1, 0.45, 0.15], [0.3, 0.85, 0.35], [0.9, 0.3, 0.8], [1, 0.85, 0.2], [0.3, 0.9, 0.9], [0.9, 0.25, 0.25], [0.75, 0.75, 0.8]];
 /** Clothing tints for the undead, picked per zombie. */
-const RAGS: RGB[] = [[1.5, 1.4, 1.25], [1.1, 1.2, 1.4], [1.6, 1.4, 1.1], [1.15, 1.3, 1.1], [1.45, 1.1, 1.05], [0.8, 0.8, 0.85], [1.7, 1.65, 1.55]];
+// Shirts: dirty white, faded blue, khaki, olive, washed-out red, grey, cream; trousers: denim,
+// khaki, charcoal, brown work trousers.
+const RAGS: RGB[] = [[3.2, 3.0, 2.6], [1.7, 2.2, 3.0], [3.0, 2.6, 1.9], [2.0, 2.3, 1.6], [3.0, 1.5, 1.3], [1.9, 1.9, 2.0], [3.4, 3.2, 2.8]];
+const SLACKS: RGB[] = [[1.0, 1.4, 2.2], [2.4, 2.1, 1.5], [1.1, 1.1, 1.15], [1.8, 1.4, 1.0], [1.3, 1.6, 2.4]];
 const LAMP: RGB = [1.0, 0.72, 0.42];
 
 const I = { door: 1, wallbuy: 2, perk: 3, crate: 4, bench: 5, tonic: 6, power: 7, workbench: 8, part: 9, console: 10 };
@@ -116,6 +119,8 @@ export class Scene {
   /** Sculpted body-part meshes, each with a batch for the world and one for the first-person view. */
   private parts: Record<string, { mesh: number; batch: Batch; vm: Batch }> = {};
   private panim = new Map<number, { phase: number; x: number; z: number; speed: number; crouch: number; reload: number; swap: number; lean: number; seen: number }>();
+  /** Debug lineup of characters in front of the camera (see main.ts openShot). */
+  lineup = false;
   private corpses: { id: number; x: number; y: number; z: number; yaw: number; kind: number; t: number; rec: Float32Array }[] = [];
   private switchAt: { x: number; z: number; nx: number; nz: number } | null = null;
   private lever = 0;
@@ -512,7 +517,7 @@ export class Scene {
     const tall = 0.93 + hsh(1) * 0.15, broad = 0.9 + hsh(2) * 0.25, slouch = hsh(3), limp = hsh(4) < 0.35 ? (hsh(5) < 0.5 ? -1 : 1) : 0;
     const oneArm = hsh(6) < 0.18 ? (hsh(7) < 0.5 ? -1 : 1) : 0;
     const rag = RAGS[z.id % RAGS.length];
-    const trouser: RGB = [rag[2] * 0.7, rag[1] * 0.7, rag[0] * 0.75];
+    const trouser: RGB = SLACKS[(z.id * 7 + 3) % SLACKS.length];
     const pall = 0.85 + hsh(8) * 0.35;
     // Dead skin: grey with a little green or blue in it, never healthy.
     const hue = hsh(15);
@@ -570,7 +575,16 @@ export class Scene {
       // Foot: a shoe pointing the way it walks, kept above the ground.
       const fwd = base.fwd;
       const sole = Math.max(ankle[1] - 0.04, z.y + rise + 0.04);
-      this.seg('boot', [ankle[0] - fwd[0] * 0.06, sole, ankle[2] - fwd[2] * 0.06], [ankle[0] + fwd[0] * 0.19 * cf, sole + sf * 0.12, ankle[2] + fwd[2] * 0.19 * cf], 0.055, [0.45, 0.38, 0.32], MAT.fabric, 0.06, right);
+      const barefoot = hsh(42) < 0.3;
+      this.seg('boot', [ankle[0] - fwd[0] * 0.06, sole, ankle[2] - fwd[2] * 0.06], [ankle[0] + fwd[0] * 0.19 * cf, sole + sf * 0.12, ankle[2] + fwd[2] * 0.19 * cf], barefoot ? 0.048 : 0.055, barefoot ? skinTint : [0.45, 0.38, 0.32], barefoot ? MAT.skin : MAT.fabric, barefoot ? 0.045 : 0.06, right);
+      if (barefoot) {
+        // Toes, and grime up the foot.
+        for (let tq = -2; tq <= 2; tq++) {
+          const tb: V3 = [ankle[0] + fwd[0] * 0.2 * cf + right[0] * tq * 0.018, sole - 0.015, ankle[2] + fwd[2] * 0.2 * cf + right[2] * tq * 0.018];
+          out.limb(tb, [tb[0] + fwd[0] * 0.035, tb[1] - 0.005, tb[2] + fwd[2] * 0.035], tq === -2 * side ? 0.014 : 0.01, skinTint, MAT.skin, 0, 0.01);
+        }
+        this.put('ball', ankle[0] + fwd[0] * 0.06, sole - 0.01, ankle[2] + fwd[2] * 0.06, 0.1, 0.04, 0.2, [0.2, 0.17, 0.14], MAT.skin, 0, 0, a.yaw);
+      }
     }
     const jawDropEarly = (0.035 + a.attack * 0.04) * live;
     // Torso: pelvis, a hunched rib cage wider at the shoulders, and the belly between.
@@ -581,6 +595,16 @@ export class Scene {
     const wound = at(chestL[0] + (hsh(10) - 0.5) * 0.2, chestL[1] - 0.16 - hsh(11) * 0.1, chestL[2] + 0.1);
     out.limb(wound, [wound[0] + right[0] * 0.07, wound[1] - 0.06, wound[2] + right[2] * 0.07], 0.05, gore, MAT.skin, 0, 0.03);
     void ribs;
+    // Some have the shirt and skin torn open over the ribs.
+    if (hsh(40) < 0.5) {
+      const rs = hsh(43) < 0.5 ? -1 : 1;
+      const cav = at(chestL[0] + rs * 0.09, chestL[1] - 0.2, chestL[2] + 0.115);
+      this.put('ball', cav[0], cav[1], cav[2], 0.13, 0.16, 0.035, [0.45, 0.07, 0.06], MAT.skin, 0, 0, a.yaw, -lean);
+      for (let k = 0; k < 4; k++) {
+        const y = chestL[1] - 0.12 - k * 0.042;
+        out.limb(at(chestL[0] + rs * 0.025, y, chestL[2] + 0.13), at(chestL[0] + rs * 0.17, y - 0.035, chestL[2] + 0.1), 0.011, [0.82, 0.76, 0.64], MAT.skin, 0, 0.009);
+      }
+    }
     // Ripped clothing: strips of shirt hanging and swinging, a torn trouser leg, dried blood.
     for (let k = 0; k < 4; k++) {
       const sx = (hsh(20 + k) - 0.5) * 0.36, len = 0.12 + hsh(24 + k) * 0.2;
@@ -593,7 +617,8 @@ export class Scene {
     const [tk, ta] = chain(at, [tornSide * 0.1, hip - 0.04, 0], 0.46, 0.44, Math.sin(ph + (tornSide > 0 ? Math.PI : 0)) * amp * (limp === tornSide ? 0.45 : 1) * live, (Math.max(0, -Math.cos(ph + (tornSide > 0 ? Math.PI : 0))) * amp * 1.5 * (limp === tornSide ? 0.45 : 1) + 0.1) * live + fall * 0.5 * (tornSide > 0 ? 1 : 0.3));
     this.seg('shin', [(tk[0] + ta[0]) / 2, (tk[1] + ta[1]) / 2, (tk[2] + ta[2]) / 2], ta, 0.062, skinTint, MAT.skin, 0.066, right);
     const stain = at(chestL[0] + (hsh(33) - 0.5) * 0.12, chestL[1] - 0.02, chestL[2] + 0.115);
-    this.put('gear', stain[0], stain[1], stain[2], 0.16, 0.2, 0.04, [0.28, 0.04, 0.03], MAT.fabric, 0, 0, a.yaw, -lean);
+    this.put('ball', stain[0], stain[1], stain[2], 0.12, 0.17, 0.035, [0.55, 0.08, 0.06], MAT.fabric, 0, 0, a.yaw, -lean, hsh(34) - 0.5);
+    this.put('ball', stain[0] + right[0] * 0.03, stain[1] - 0.09, stain[2] + right[2] * 0.03, 0.05, 0.12, 0.03, [0.45, 0.06, 0.05], MAT.fabric, 0, 0, a.yaw, -lean); // run
     const chin = at(headL[0], headL[1] - 0.07 - jawDropEarly, headL[2] + 0.09);
     this.put('gear', chin[0], chin[1], chin[2], 0.07, 0.04, 0.04, gore, MAT.skin, 0, 0, a.yaw);
     // Neck and head: skull, brow, sunken cheeks, a slack jaw that works as it moans.
@@ -606,10 +631,25 @@ export class Scene {
     this.put('gear', jp[0], jp[1], jp[2], 0.11, 0.045, 0.1, skinTint, MAT.skin, 0, 0, a.yaw, 0.35 + fa, tilt);
     const mouth = at(headL[0], headL[1] - 0.02 - jawDrop * 0.5, headL[2] + 0.1);
     out.box(mouth[0], mouth[1], mouth[2], 0.09, 0.02 + jawDrop, 0.03, [0.12, 0.02, 0.02], MAT.skin, 0, 0, a.yaw, fa, tilt);
+    // Broken, yellowed teeth, upper and lower; blood run down the chin.
+    const teeth = at(headL[0], headL[1] - 0.012, headL[2] + 0.108);
+    out.box(teeth[0], teeth[1], teeth[2], 0.07, 0.014, 0.012, [0.75, 0.68, 0.5], MAT.skin, 0, 0, a.yaw, fa, tilt);
+    const lower = at(headL[0], headL[1] - 0.03 - jawDrop, headL[2] + 0.102);
+    out.box(lower[0], lower[1], lower[2], 0.06, 0.012, 0.012, [0.7, 0.62, 0.45], MAT.skin, 0, 0, a.yaw, fa, tilt);
+    if (hsh(44) < 0.6) { const d0 = at(headL[0] + 0.02, headL[1] - 0.05 - jawDrop, headL[2] + 0.11); out.limb(d0, [d0[0], d0[1] - 0.08, d0[2] + base.fwd[2] * 0.01], 0.008, [0.35, 0.03, 0.03], MAT.skin, 0, 0.004); }
     if (hsh(12) < 0.6) {
       // Matted hair.
       const hair = at(headL[0], headL[1] + 0.15, headL[2] - 0.04);
       this.put('helmet', hair[0], hair[1] - 0.03, hair[2], 0.215, 0.17, 0.235, [0.25, 0.22, 0.2], MAT.fabric, 0, 0, a.yaw, -lean * 0.45 + fa, tilt);
+      // Long, lank strands that swing as it lurches.
+      if (hsh(41) < 0.55) {
+        for (let k = 0; k < 7; k++) {
+          const dx = (k / 6 - 0.5) * 0.2, len = 0.12 + hsh(60 + k) * 0.18;
+          const swing = Math.sin(ph + k) * 0.04 * go + Math.sin(t * 1.7 + k * 0.9) * 0.015;
+          const root = at(headL[0] + dx, headL[1] + 0.08, headL[2] - 0.07 - Math.abs(dx) * 0.2);
+          out.limb(root, [root[0] + right[0] * (dx * 0.4 + swing), root[1] - len, root[2] + right[2] * (dx * 0.4 + swing) - base.fwd[2] * 0.03], 0.013, [0.2, 0.18, 0.16], MAT.fabric, 0, 0.006);
+        }
+      }
     }
     // Arms: shamblers grope ahead, runners pump, an attack lunges and claws. A missing arm is a stump.
     for (const side of [-1, 1]) {
@@ -628,6 +668,15 @@ export class Scene {
       const hand = at(chestL[0] + side * (0.2 + fall * 0.25), chestL[1] - 0.34 + raise * 0.47, chestL[2] + 0.36 * live + raise * 0.13 + a.attack * 0.12);
       this.seg('upperArm', sh, el, 0.055, hsh(13 + side) < 0.5 ? rag : skinTint, hsh(13 + side) < 0.5 ? MAT.fabric : MAT.skin, 0.053, right);
       this.seg('forearm', el, hand, 0.045, skinTint, MAT.skin, 0.04, right);
+      // Bruising and lividity on the forearm; a ragged sleeve end that flaps.
+      const fm: V3 = [(el[0] + hand[0]) / 2, (el[1] + hand[1]) / 2, (el[2] + hand[2]) / 2];
+      if (hsh(50 + side) < 0.6) this.put('ball', fm[0] + right[0] * side * 0.03, fm[1], fm[2] + right[2] * side * 0.03, 0.07, 0.05, 0.07, [0.32, 0.16, 0.26], MAT.skin, 0, 0, a.yaw);
+      if (hsh(13 + side) < 0.5) {
+        for (let k = 0; k < 2; k++) {
+          const flap = Math.sin(ph * 2 + side + k * 2) * 0.03 * go + Math.sin(t * 2 + k) * 0.01;
+          out.limb([el[0] + right[0] * side * 0.03 * k, el[1], el[2]], [el[0] + right[0] * (side * 0.03 * k + flap), el[1] - 0.09 - k * 0.03, el[2] + right[2] * flap], 0.022, [rag[0] * 0.8, rag[1] * 0.8, rag[2] * 0.8], MAT.fabric, 0, 0.007);
+        }
+      }
       const hd = [hand[0] - el[0], hand[1] - el[1], hand[2] - el[2]], hl = Math.hypot(hd[0], hd[1], hd[2]) || 1;
       this.seg('hand', hand, [hand[0] + (hd[0] / hl) * 0.12, hand[1] + (hd[1] / hl) * 0.12, hand[2] + (hd[2] / hl) * 0.12], 0.045, skinTint, MAT.skin, 0.025, right);
       // Hand: a palm and three hooked fingers.
@@ -642,7 +691,7 @@ export class Scene {
     const eye: RGB = turned ? [0.4, 0.8, 1] : [1, 0.62, 0.12];
     for (const side of [-1, 1]) {
       const e = at(headL[0] + side * 0.05, headL[1] + 0.075, headL[2] + 0.115);
-      glow.box(e[0], e[1], e[2], 0.032, 0.02, 0.02, eye, -1, 7 * live, FLAG_NOSHADOW, a.yaw);
+      glow.box(e[0], e[1], e[2], 0.026, 0.016, 0.02, eye, -1, 2.6 * live, FLAG_NOSHADOW, a.yaw);
     }
   }
 
@@ -757,6 +806,16 @@ export class Scene {
       this.put('gear', ...at(lx + sway * 0.7, chestL[1] - 0.105, chestL[2] + 0.185), 0.06, 0.04, 0.035, [0.15, 0.15, 0.15], MAT.polymer, 0, 0, p.yaw, -bend);
     }
     this.put('gear', ...at(-0.15, chestL[1] + 0.02, chestL[2] + 0.15), 0.06, 0.13, 0.045, [0.12, 0.12, 0.12], MAT.polymer, 0, 0, p.yaw, -bend);
+    // Webbing rows across the back plate and cummerbund; strap ends and a tourniquet that swing
+    // with the stride.
+    for (let r = 0; r < 4; r++) this.put('gear', ...at(sway * 0.8, chestL[1] - 0.22 + r * 0.075, chestL[2] - 0.165), 0.3 * bulk, 0.022, 0.012, [web[0] * 0.75, web[1] * 0.75, web[2] * 0.75], MAT.fabric, 0, 0, p.yaw, -bend);
+    for (const sx of [-0.2, 0.2]) for (let r = 0; r < 2; r++) this.put('gear', ...at(sx * bulk, chestL[1] - 0.24 + r * 0.06, chestL[2]), 0.012, 0.02, 0.3, [web[0] * 0.75, web[1] * 0.75, web[2] * 0.75], MAT.fabric, 0, 0, p.yaw, -bend);
+    for (const [sx, len] of [[-0.17, 0.13], [0.06, 0.1]] as const) {
+      const top = at(sx * bulk, chestL[1] - 0.28, chestL[2] + 0.16);
+      const swing = Math.sin(ph * 2 + sx * 20) * 0.04 * go;
+      out.limb(top, [top[0] + fwd[0] * (swing + 0.01), top[1] - len, top[2] + fwd[2] * (swing + 0.01)], 0.012, [0.12, 0.12, 0.12], MAT.fabric, 0, 0.004);
+    }
+    this.put('gear', ...at(0.08, chestL[1] - 0.04, chestL[2] + 0.16), 0.05, 0.11, 0.035, [0.1, 0.1, 0.1], MAT.fabric, 0, 0, p.yaw, -bend); // tourniquet
     out.box(...at(-0.15, chestL[1] + 0.14, chestL[2] + 0.15), 0.012, 0.16, 0.012, [0.1, 0.1, 0.1], MAT.polymer); // aerial
     // Pack.
     if (look.pack > 0) {
@@ -776,8 +835,10 @@ export class Scene {
     const faceTint: RGB = masked ? [0.35, 0.35, 0.36] : skin;
     this.put('head', head[0], head[1], head[2], 0.205, 0.255, 0.235, faceTint, masked ? MAT.fabric : MAT.skin, 0, 0, p.yaw, hp);
     const onHead = (lx: number, ly: number, lz: number): V3 => at(headL[0] + lx / bulk, headL[1] + ly * Math.cos(hp) + lz * Math.sin(hp), headL[2] + lz * Math.cos(hp) - ly * Math.sin(hp));
+    for (const ex of [-0.104, 0.104]) this.put('ball', ...onHead(ex, 0.01, -0.005), 0.025, 0.06, 0.045, faceTint, masked ? MAT.fabric : MAT.skin, 0, 0, p.yaw, hp); // ears
     if (!masked) {
       for (const ex of [-0.04, 0.04]) out.box(...onHead(ex, 0.025, 0.098), 0.028, 0.014, 0.012, [0.08, 0.06, 0.05], MAT.skin, 0, 0, p.yaw, hp); // eyes
+      for (const ex of [-0.042, 0.042]) out.box(...onHead(ex, 0.048, 0.1), 0.036, 0.008, 0.012, [0.12, 0.09, 0.07], MAT.fabric, 0, 0, p.yaw, hp, ex * 2); // eyebrows
     }
     const hairTint: RGB = [0.16, 0.12, 0.09];
     if (look.face === 1 || look.face === 2) out.box(...onHead(0, -0.075, 0.05), look.face === 2 ? 0.17 : 0.165, look.face === 2 ? 0.13 : 0.09, 0.15, look.face === 2 ? hairTint : [skin[0] * 0.6, skin[1] * 0.6, skin[2] * 0.6], look.face === 2 ? MAT.fabric : MAT.skin, 0, 0, p.yaw, hp);
@@ -837,6 +898,11 @@ export class Scene {
     const reloadHand: V3 = [magWell[0] + (pouch[0] - magWell[0]) * cycle, magWell[1] + (pouch[1] - magWell[1]) * cycle, magWell[2] + (pouch[2] - magWell[2]) * cycle];
     const fore = [0, 1, 2].map(i => foreRest[i] + (reloadHand[i] - foreRest[i]) * a.reload) as V3;
     const bare = look.sleeves === 2, rolled = look.sleeves === 1;
+    // Sling from the front of the weapon over the support shoulder, sagging a little.
+    const slingA = transformPoint(gm, [0, -0.03, foreZ * 0.9]), slingB = at(-0.17, chestL[1] + 0.13, chestL[2] - 0.02);
+    const slingMid: V3 = [(slingA[0] + slingB[0]) / 2, (slingA[1] + slingB[1]) / 2 - 0.08, (slingA[2] + slingB[2]) / 2];
+    out.limb(slingA as V3, slingMid, 0.012, [0.12, 0.12, 0.11], MAT.fabric, 0, 0.004);
+    out.limb(slingMid, slingB, 0.012, [0.12, 0.12, 0.11], MAT.fabric, 0, 0.004);
     for (const [sd, hand] of [[1, grip], [-1, fore]] as const) {
       const sh = at(sd * 0.215, chestL[1] + 0.02, chestL[2]);
       const el: V3 = [(sh[0] + hand[0]) / 2 + right[0] * sd * 0.09, (sh[1] + hand[1]) / 2 - 0.15, (sh[2] + hand[2]) / 2 + right[2] * sd * 0.09 - fwd[2] * 0.03];
@@ -847,6 +913,13 @@ export class Scene {
       if (bare) this.seg('upperArm', sh, [(sh[0] * 2 + el[0]) / 3, (sh[1] * 2 + el[1]) / 3, (sh[2] * 2 + el[2]) / 3], 0.072 * bulk, fatigues, MAT.fabric, 0.07 * bulk, right);
       this.seg('forearm', el, hand as V3, 0.052 * bulk, bare || rolled ? skin : fatigues, bare || rolled ? MAT.skin : MAT.fabric, 0.048 * bulk, right);
       if (look.pads === 2) this.put('gear', el[0], el[1], el[2], 0.11, 0.12, 0.11, [0.5, 0.5, 0.5], MAT.polymer);
+      // Shoulder patch on the sleeve; a watch on the support wrist.
+      const um: V3 = [(sh[0] * 2 + el[0]) / 3 + right[0] * sd * 0.06, (sh[1] * 2 + el[1]) / 3, (sh[2] * 2 + el[2]) / 3 + right[2] * sd * 0.06];
+      this.put('gear', um[0], um[1], um[2], 0.015, 0.075, 0.065, sd > 0 ? (sideTint ?? [0.25, 0.3, 0.22]) : [0.18, 0.2, 0.16], MAT.fabric, 0, 0, p.yaw);
+      if (sd < 0) {
+        const wr: V3 = [el[0] + (hand[0] - el[0]) * 0.8, el[1] + (hand[1] - el[1]) * 0.8, el[2] + (hand[2] - el[2]) * 0.8];
+        this.put('ball', wr[0], wr[1], wr[2], 0.075, 0.06, 0.075, [0.08, 0.08, 0.08], MAT.polymer, 0, 0, p.yaw);
+      }
       // Hand: palm, thumb and fingers wrapped round the weapon.
       const hd = [hand[0] - el[0], hand[1] - el[1], hand[2] - el[2]], hl = Math.hypot(hd[0], hd[1], hd[2]) || 1;
       const wrist: V3 = [hand[0] - (hd[0] / hl) * 0.04, hand[1] - (hd[1] / hl) * 0.04, hand[2] - (hd[2] / hl) * 0.04];
@@ -980,6 +1053,21 @@ export class Scene {
     this.corpses = this.corpses.filter(c => c.t < 6.5);
     if (this.zanim.size > 200) for (const [id, a] of this.zanim) if (t - a.seen > 10) this.zanim.delete(id);
     for (const p of s.players()) if (p.rec[P.life] !== 2) this.survivor(round, glows, groups, p, t, dt);
+    // Debug (?shot with &lineup): a row of the dead and two soldiers in front of the camera.
+    if (this.lineup) {
+      const fx = -Math.sin(view.yaw), fz = -Math.cos(view.yaw), rx = Math.cos(view.yaw), rz = -Math.sin(view.yaw);
+      const face = Math.atan2(-fx, -fz) + Math.PI;
+      const zr = new Float32Array(64); zr[this.sim.L.Z.hp] = 1;
+      for (let k = 0; k < 3; k++) {
+        const d = 3.2, o = (k - 1) * 1.1;
+        this.zombie(round, glows, { id: 7 + k * 13, x: view.pos[0] + fx * d + rx * o, y: 0, z: view.pos[2] + fz * d + rz * o, yaw: face, rec: zr }, 1, k, t, 0);
+      }
+      const pr = new Float32Array(this.sim.L.P.size ?? 512);
+      for (let k = 0; k < 2; k++) {
+        const d = 4.6, o = (k ? 1 : -1) * 1.9;
+        this.survivor(round, glows, groups, { id: k, x: view.pos[0] + fx * d + rx * o, y: 0, z: view.pos[2] + fz * d + rz * o, yaw: face + (k ? -0.5 : 0.5), rec: pr }, t, 0);
+      }
+    }
     // Third person: our own body is drawn like anyone else's, where our feet are.
     const third = (settings.third ?? 0) > 0.25;
     if (third && !settings.noSelf && me.length && me[P.life] !== 2) {
@@ -1207,6 +1295,25 @@ export class Scene {
       }
     }
     this.lastAngles = [view.yaw, view.pitch];
+
+    // Leaves and scraps of paper blowing past on the wind (no wind on the Moon). Each loops along
+    // the wind through a box around the camera, tumbling and skipping off the ground in gusts.
+    if (s.mapInfo.theme !== 3) {
+      const W = [0.8, 0.6], box = 26;
+      for (let i = 0; i < 28; i++) {
+        const h = (n: number) => { let x = Math.imul(i * 2654435761 + n * 40503, 2246822519) >>> 0; x ^= x >>> 13; return (x % 1000) / 1000; };
+        const speed = 1.6 + h(1) * 2.2, off = h(2) * box, side = (h(3) - 0.5) * box;
+        const along = ((t * speed + off) % box) - box / 2;
+        const cx = Math.round(view.pos[0] / 4) * 4, cz = Math.round(view.pos[2] / 4) * 4;
+        const x = cx + W[0] * along - W[1] * side + Math.sin(t * 1.3 + i) * 0.3, z = cz + W[1] * along + W[0] * side + Math.cos(t * 1.1 + i) * 0.3;
+        if (this.solidAt(x, z)) continue;
+        const gust = 0.5 + 0.5 * Math.sin((x * W[0] + z * W[1]) * 0.12 - t * 1.1);
+        const y = 0.03 + Math.abs(Math.sin(t * (2 + h(4) * 2) + i * 3)) * (0.15 + gust * 0.9) * h(5);
+        const paper = h(6) < 0.3;
+        const c: RGB = paper ? [0.85, 0.83, 0.75] : [[0.35, 0.2, 0.06], [0.42, 0.3, 0.08], [0.3, 0.3, 0.1]][i % 3] as RGB;
+        casters.box(x, y, z, paper ? 0.2 : 0.09, 0.004, paper ? 0.14 : 0.06, c, paper ? MAT.fabric : -1, 0, FLAG_NOSHADOW, t * (1 + h(7) * 3) + i, Math.sin(t * 3 + i) * 1.2, Math.cos(t * 2.3 + i) * 1.2);
+      }
+    }
 
     // Nearest lights win the 16 slots. Some lamps flicker.
     for (const l of this.staticLights) {

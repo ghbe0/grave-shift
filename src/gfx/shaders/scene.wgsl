@@ -56,20 +56,61 @@ struct VOut {
   @location(9) @interpolate(flat) n2: vec3f,
 }
 
-// Foliage sways: a slow lean that grows with height plus a quick flutter.
-fn wind(world: vec3f, flags: u32) -> vec3f {
-  if ((flags & 8u) == 0u) { return world; }
+// Wind. Gusts roll across the map along the wind direction. Flags: 8 foliage (leans with
+// height and flutters), 16 grass (bends from the root, more at the tip), 32 cloth (pinned along
+// local x = -0.5, waves run to the free edge), 128 cable (swings most at mid-span).
+const WIND = vec2f(0.8, 0.6);
+fn gustAt(p: vec2f, t: f32) -> f32 {
+  let along = dot(p, WIND);
+  return 0.55 + 0.45 * sin(along * 0.12 - t * 1.1) * sin(along * 0.05 + p.y * 0.03 - t * 0.37 + 1.3);
+}
+fn displace(v: VIn) -> vec3f {
+  var world = v.m0.xyz * v.pos.x + v.m1.xyz * v.pos.y + v.m2.xyz * v.pos.z + v.m3.xyz;
+  let flags = u32(v.params.w);
+  if ((flags & 184u) == 0u) { return world; }
   let t = G.params.y;
-  let lean = clamp(world.y * 0.22, 0.0, 1.4) * 0.05;
-  let slow = vec2f(sin(t * 1.3 + world.x * 0.7 + world.z * 0.5), cos(t * 1.05 + world.z * 0.6 - world.x * 0.4));
-  let quick = vec2f(sin(t * 4.3 + world.y * 3.1 + world.x * 2.3), cos(t * 3.7 + world.y * 2.7 + world.z * 2.9)) * 0.007;
-  return world + vec3f(slow.x * lean + quick.x, 0.0, slow.y * lean + quick.y);
+  let base = v.m3.xz;
+  let gust = gustAt(base, t);
+  if ((flags & 16u) != 0u) {
+    let h = max(v.pos.y, 0.0);
+    let flutter = sin(t * 3.1 + base.x * 1.7 + base.y * 1.3 + v.pos.x * 4.0) * 0.08;
+    let bend = h * h * length(v.m1.xyz) * (0.38 * gust + flutter);
+    world += vec3f(WIND.x, 0.0, WIND.y) * bend;
+    world.y -= bend * bend * 0.6;
+  } else if ((flags & 8u) != 0u) {
+    let lean = clamp(world.y * 0.22, 0.0, 1.4) * (0.025 + 0.06 * gust);
+    let slow = vec2f(sin(t * 1.3 + world.x * 0.7 + world.z * 0.5), cos(t * 1.05 + world.z * 0.6 - world.x * 0.4));
+    let quick = vec2f(sin(t * 4.3 + world.y * 3.1 + world.x * 2.3), cos(t * 3.7 + world.y * 2.7 + world.z * 2.9)) * (0.004 + 0.012 * gust);
+    world = world + vec3f(WIND.x * lean + slow.x * lean * 0.5 + quick.x, quick.x * 0.5, WIND.y * lean + slow.y * lean * 0.5 + quick.y);
+  }
+  if ((flags & 32u) != 0u) {
+    let f = v.pos.x + 0.5;
+    let wave = sin(v.pos.x * 7.0 - t * 6.0 + base.x) * 0.6 + sin(v.pos.x * 13.0 + v.pos.y * 5.0 - t * 9.0) * 0.25;
+    world += normalize(v.m2.xyz) * wave * f * length(v.m0.xyz) * 0.09 * (0.5 + gust);
+  }
+  if ((flags & 128u) != 0u) {
+    // Hangs in a curve (sag about 5% of the span) and swings sideways.
+    let sag = 1.0 - 4.0 * v.pos.y * v.pos.y;
+    let span = length(v.m1.xyz);
+    world.y -= sag * span * 0.05;
+    world += normalize(v.m2.xyz) * sin(t * 1.6 + base.x * 0.3) * (0.03 + 0.012 * span) * sag * (0.4 + gust);
+  }
+  return world;
+}
+
+// Cheap smooth noise for large-scale colour variation.
+fn vhash(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+fn vnoise(p: vec2f) -> f32 {
+  let i = floor(p);
+  let f = fract(p);
+  let u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(vhash(i), vhash(i + vec2f(1.0, 0.0)), u.x), mix(vhash(i + vec2f(0.0, 1.0)), vhash(i + vec2f(1.0, 1.0)), u.x), u.y);
 }
 
 @vertex
 fn vs(v: VIn) -> VOut {
   var o: VOut;
-  let world = wind(v.m0.xyz * v.pos.x + v.m1.xyz * v.pos.y + v.m2.xyz * v.pos.z + v.m3.xyz, u32(v.params.w));
+  let world = displace(v);
   // Inverse-transpose columns for rotation + non-uniform scale.
   o.n0 = v.m0.xyz / dot(v.m0.xyz, v.m0.xyz);
   o.n1 = v.m1.xyz / dot(v.m1.xyz, v.m1.xyz);
@@ -98,7 +139,7 @@ fn vs(v: VIn) -> VOut {
 
 @vertex
 fn vs_shadow(v: VIn) -> @builtin(position) vec4f {
-  let world = wind(v.m0.xyz * v.pos.x + v.m1.xyz * v.pos.y + v.m2.xyz * v.pos.z + v.m3.xyz, u32(v.params.w));
+  let world = displace(v);
   return G.shadowViewProj * vec4f(world, 1.0);
 }
 
@@ -208,6 +249,36 @@ fn fs(i: VOut) -> @location(0) vec4f {
     rough = mat.rough * i.params.y;
     ao = mat.ao;
     n = normalize(i.n0 * mat.normal.x + i.n1 * mat.normal.y + i.n2 * mat.normal.z);
+  }
+  // Grass: dark at the root, lighter and a touch yellower at the tip.
+  if ((flags & 16u) != 0u) {
+    let tip = 1.0 - i.uv.y;
+    albedo *= mix(vec3f(0.35, 0.38, 0.32), vec3f(1.25, 1.22, 0.95), tip);
+  }
+  // Puddles: rippling, mirror-smooth water.
+  if ((flags & 64u) != 0u) {
+    let t = G.params.y;
+    let q = i.world.xz;
+    let rip = vec2f(sin(q.x * 9.0 + t * 2.3) + sin(q.x * 4.1 - q.y * 6.3 + t * 1.7), sin(q.y * 8.3 - t * 2.1) + sin(q.y * 3.7 + q.x * 5.9 + t * 1.3));
+    n = normalize(vec3f(rip.x * 0.035, 1.0, rip.y * 0.035));
+    albedo = vec3f(0.3, 0.34, 0.38);
+    rough = 0.04;
+    metallic = 0.85;
+  }
+  // Large-scale variation so floors and walls never look like one repeated tile.
+  if ((flags & 74u) == 0u) {
+    let big = vnoise(i.world.xz * 0.09 + i.world.y * 0.05) * 0.6 + vnoise(i.world.xz * 0.31) * 0.4;
+    albedo *= 0.74 + 0.5 * big;
+    // Ground: patches of dirt and damp, darker in the low spots.
+    let upf = max(normalize(i.normal).y, 0.0);
+    let dirt = smoothstep(0.45, 0.8, vnoise(i.world.xz * 0.21 + vec2f(13.0, 7.0))) * upf;
+    albedo = mix(albedo, albedo * vec3f(0.62, 0.55, 0.45), dirt * 0.7);
+    let damp = smoothstep(0.6, 0.85, vnoise(i.world.xz * 0.13 + vec2f(3.0, 41.0))) * upf;
+    albedo *= 1.0 - damp * 0.35;
+    rough *= 1.0 - damp * 0.55;
+    // Grime where walls meet the ground.
+    let vert = 1.0 - abs(normalize(i.normal).y);
+    ao *= mix(1.0, 0.55 + 0.45 * smoothstep(0.0, 0.9, i.world.y), vert);
   }
   rough = clamp(rough, 0.05, 1.0);
   // Geometry facing away after normal mapping: keep it lit from the front side.

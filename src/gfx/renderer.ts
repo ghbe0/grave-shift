@@ -24,6 +24,10 @@ export const FLAG_GRID = 1; // procedural greybox grid on top of the base colour
 export const FLAG_VIEWMODEL = 2; // first-person weapon: own projection, drawn over the world
 export const FLAG_NOSHADOW = 4; // receives no sun shadow (glows, tracers)
 export const FLAG_FOLIAGE = 8; // leaves: gaps in the leaf material are cut out, light shines through, sways in the wind
+export const FLAG_GRASS = 16; // grass blades: bend from the root in gusts, shaded dark root to light tip
+export const FLAG_CLOTH = 32; // flags and tarps: pinned along local x = -0.5, ripple in the wind
+export const FLAG_WATER = 64; // puddles: rippling mirror surface
+export const FLAG_CABLE = 128; // hanging cables: swing at mid-span
 
 /** Depth below this is the viewmodel; the world is squeezed into the rest of the range. */
 export const VIEWMODEL_DEPTH = 0.05;

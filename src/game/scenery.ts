@@ -3,8 +3,8 @@
 // litter. Trees, barrels, sandbags and boulders have collision in the simulation (map characters
 // T, O, S and R arrive as boxes with materials 13 to 16); everything else is decoration, placed
 // from a fixed seed so every player sees the same level.
-import { coneMesh, lumpMesh, rng, tuftMesh } from '../gfx/nature';
-import { FLAG_FOLIAGE, FLAG_NOSHADOW, MAT, type Draw, type Renderer } from '../gfx/renderer';
+import { clothMesh, coneMesh, frondMesh, grassClumpMesh, leafClusterMesh, lumpMesh, patchMesh, rng, weedMesh } from '../gfx/nature';
+import { FLAG_CABLE, FLAG_CLOTH, FLAG_FOLIAGE, FLAG_GRASS, FLAG_NOSHADOW, FLAG_WATER, MAT, type Draw, type Renderer } from '../gfx/renderer';
 import { Batch, type V3 } from './batch';
 
 type RGB = [number, number, number];
@@ -13,7 +13,9 @@ export const SCENERY_MATS = { tree: 13, barrels: 14, sandbags: 15, boulder: 16 }
 const BARK: RGB = [1, 1, 1];
 const LEAF_TINTS: RGB[] = [[1.5, 1.5, 1.4], [1.2, 1.6, 1.1], [1.7, 1.5, 0.9], [1.05, 1.4, 1.2]];
 const PINE: RGB = [0.75, 1.2, 1.05];
-const GRASS: RGB[] = [[0.08, 0.17, 0.04], [0.12, 0.22, 0.05], [0.16, 0.22, 0.07], [0.2, 0.2, 0.08]];
+const GRASS: RGB[] = [[0.09, 0.19, 0.045], [0.13, 0.24, 0.06], [0.17, 0.24, 0.08], [0.22, 0.22, 0.09], [0.11, 0.2, 0.07]];
+const WEED: RGB[] = [[0.1, 0.24, 0.06], [0.14, 0.28, 0.08], [0.08, 0.2, 0.07]];
+const GRASSY = FLAG_FOLIAGE | FLAG_GRASS;
 const LITTER: RGB[] = [[0.35, 0.2, 0.06], [0.42, 0.3, 0.08], [0.25, 0.13, 0.05], [0.3, 0.3, 0.1]];
 
 export interface Site {
@@ -35,9 +37,15 @@ export class Scenery {
   private leaves = new Batch();
   private cones = new Batch();
   private rocks = new Batch();
-  private tufts = new Batch();
+  private clumps = new Batch();
+  private clumpsB = new Batch();
+  private weeds = new Batch();
+  private patches = new Batch();
+  private canopy = new Batch();
+  private fronds = new Batch();
+  private cloth = new Batch();
   private glow = new Batch();
-  private meshes: { cube: number; sphere: number; cylinder: number; lump: number; cone: number; rock: number; tuft: number };
+  private meshes: { cube: number; sphere: number; cylinder: number; lump: number; cone: number; rock: number; clump: number; clumpB: number; weed: number; patch: number; canopy: number; frond: number; cloth: number };
   private rnd: () => number;
 
   constructor(renderer: Renderer, cube: number, sphere: number, cylinder: number, private site: Site) {
@@ -46,7 +54,13 @@ export class Scenery {
       lump: renderer.createMesh(lumpMesh(11, 0.5, 2.2)),
       cone: renderer.createMesh(coneMesh()),
       rock: renderer.createMesh(lumpMesh(23, 0.42, 1.3, 0.55, 9, 12)),
-      tuft: renderer.createMesh(tuftMesh(5)),
+      clump: renderer.createMesh(grassClumpMesh(5)),
+      clumpB: renderer.createMesh(grassClumpMesh(17, 22)),
+      weed: renderer.createMesh(weedMesh(3)),
+      patch: renderer.createMesh(patchMesh(8)),
+      canopy: renderer.createMesh(leafClusterMesh(21)),
+      frond: renderer.createMesh(frondMesh(4)),
+      cloth: renderer.createMesh(clothMesh()),
     };
     this.rnd = rng(9001 + site.seed * 131);
     this.props();
@@ -63,6 +77,9 @@ export class Scenery {
         this.markings();
         this.walls();
         this.ground();
+        this.cracks();
+        this.litter();
+        this.overhead();
       }
     }
   }
@@ -308,6 +325,41 @@ export class Scenery {
       const x = range(8, s.size[0] - 8), z = range(8, s.size[1] - 8);
       if (open(x, z)) for (const d of [-0.5, 0.5]) this.cube.box(x, 0.005, z + d, 2.4, 0.008, 0.22, [0.6, 0.6, 0.63], MAT.concrete, 0, FLAG_NOSHADOW);
     }
+    // Boot prints wandering between the modules: alternating left and right, slightly offset.
+    for (let k = 0; k < Math.round(area / 160); k++) {
+      let x = range(8, s.size[0] - 8), z = range(8, s.size[1] - 8), dir = range(0, 6.28);
+      for (let st = 0; st < 22; st++) {
+        dir += range(-0.25, 0.25);
+        x += Math.cos(dir) * 0.38; z += Math.sin(dir) * 0.38;
+        if (!open(x, z)) break;
+        const sd = st % 2 ? 0.11 : -0.11;
+        this.cube.box(x - Math.sin(dir) * sd, 0.004, z + Math.cos(dir) * sd, 0.27, 0.006, 0.11, [0.42, 0.42, 0.45], MAT.concrete, 0, FLAG_NOSHADOW, -dir);
+      }
+    }
+    // Power and data lines snaking over the regolith between the modules.
+    for (let k = 0; k < Math.round(area / 300); k++) {
+      let x = range(8, s.size[0] - 8), z = range(8, s.size[1] - 8), dir = range(0, 6.28);
+      const c: RGB = r() < 0.5 ? [0.08, 0.08, 0.09] : [0.9, 0.55, 0.1];
+      for (let st = 0; st < 14; st++) {
+        dir += range(-0.4, 0.4);
+        const nx = x + Math.cos(dir) * 0.8, nz = z + Math.sin(dir) * 0.8;
+        if (s.solidAt(nx, nz)) break;
+        this.sphere.limb([x, 0.03, z], [nx, 0.03, nz], 0.03, c, MAT.polymer, 0, 0.025, [0, 1, 0], 1.2);
+        x = nx; z = nz;
+      }
+    }
+    // Supply cases and regolith ripples swept up against the hull.
+    for (const w of this.wallSpots()) {
+      if (r() < 0.12) {
+        const [bx, bz] = [w.x + w.nx * 0.6 + w.nz * range(-0.6, 0.6), w.z + w.nz * 0.6 + w.nx * range(-0.6, 0.6)];
+        if (open(bx, bz)) {
+          const wd = range(0.5, 0.8);
+          this.cube.box(bx, wd * 0.3, bz, wd, wd * 0.6, wd * 0.7, r() < 0.5 ? [1.4, 1.4, 1.42] : [1.3, 0.95, 0.35], MAT.painted, 0, 0, range(0, 6.28));
+          this.cube.box(bx, wd * 0.62, bz, wd * 0.3, 0.02, wd * 0.05, [0.2, 0.2, 0.2], MAT.polymer, 0, 0, range(0, 6.28));
+        }
+      }
+      if (r() < 0.5) this.rocks.box(w.x + w.nx * 0.35, 0.02, w.z + w.nz * 0.35, w.nx ? 0.6 : 2, 0.12, w.nx ? 2 : 0.6, ROCK, MAT.concrete, 0, 0, 0);
+    }
     for (let j = 0; j < 20; j++) {
       const a = (j / 20) * 6.28, px = cx + Math.cos(a) * 3.2, pz = cz + Math.sin(a) * 3.2;
       if (!s.solidAt(px, pz)) { this.cube.box(px, 0.007, pz, 0.7, 0.01, 0.16, [0.9, 0.7, 0.1], MAT.painted, 0, FLAG_NOSHADOW, -a); if (j % 5 === 0) this.glow.box(px, 0.05, pz, 0.1, 0.06, 0.1, [0.3, 0.6, 1], -1, 5, FLAG_NOSHADOW); }
@@ -456,11 +508,17 @@ export class Scenery {
     add(m.lump, this.leaves, true);
     add(m.cone, this.cones, true);
     add(m.rock, this.rocks, true);
-    add(m.tuft, this.tufts, false);
+    add(m.patch, this.patches, false);
+    add(m.clump, this.clumps, false);
+    add(m.clumpB, this.clumpsB, false);
+    add(m.weed, this.weeds, false);
+    add(m.canopy, this.canopy, true);
+    add(m.frond, this.fronds, true);
+    add(m.cloth, this.cloth, true);
     add(m.cube, this.glow, false);
   }
   get instanceCount(): number {
-    return this.cube.n + this.sphere.n + this.cylinder.n + this.leaves.n + this.cones.n + this.rocks.n + this.tufts.n + this.glow.n;
+    return this.cube.n + this.sphere.n + this.cylinder.n + this.leaves.n + this.cones.n + this.rocks.n + this.clumps.n + this.clumpsB.n + this.weeds.n + this.patches.n + this.canopy.n + this.fronds.n + this.cloth.n + this.glow.n;
   }
 
   private range(a: number, b: number): number { return a + (b - a) * this.rnd(); }
@@ -469,8 +527,12 @@ export class Scenery {
   /** A cluster of leaves: a ragged outer shell over a darker solid core, so gaps show depth, not sky. */
   private leafBall(x: number, y: number, z: number, r: number, tint: RGB, squash = 1): void {
     const yaw = this.range(0, 6.28), d = r * 2;
-    this.sphere.box(x, y, z, d * 0.78, d * 0.78 * squash, d * 0.78, [tint[0] * 0.45, tint[1] * 0.45, tint[2] * 0.45], MAT.leaves, 0, 0, yaw);
-    this.leaves.box(x, y, z, d * 1.15, d * 1.15 * squash, d * 1.15, tint, MAT.leaves, 0, FLAG_FOLIAGE, yaw, this.range(-0.4, 0.4), this.range(-0.4, 0.4));
+    // A dark, solid heart so the crown never looks hollow, inside layered leaf cards that let
+    // light and sky through at the edges.
+    this.leaves.box(x, y, z, d * 0.68, d * 0.68 * squash, d * 0.68, [tint[0] * 0.4, tint[1] * 0.4, tint[2] * 0.4], MAT.leaves, 0, 0, yaw);
+    // Real leaves round it; the tint varies a little from cluster to cluster.
+    const shade = this.range(0.85, 1.12);
+    this.canopy.box(x, y, z, d * 1.22, d * 1.22 * squash, d * 1.22, [tint[0] * 0.11 * shade, tint[1] * 0.22 * shade, tint[2] * 0.06 * shade], -1, 0, FLAG_FOLIAGE, yaw, this.range(-0.4, 0.4), this.range(-0.4, 0.4), 0, 0.7);
   }
 
   private bush(x: number, z: number, size: number): void {
@@ -505,6 +567,15 @@ export class Scenery {
       const end: V3 = [from[0] + Math.cos(a) * reach, from[1] + this.range(0.5, 1.3), from[2] + Math.sin(a) * reach];
       this.sphere.limb(from, end, 0.085, BARK, MAT.bark, 0, 0.06);
       this.leafBall(end[0], end[1] + 0.25, end[2], this.range(0.85, 1.2), tint, 0.85);
+      // Twigs fork off each bough, each carrying a smaller spray.
+      for (let j = 0; j < 2; j++) {
+        const f = this.range(0.45, 0.8);
+        const mid: V3 = [from[0] + (end[0] - from[0]) * f, from[1] + (end[1] - from[1]) * f, from[2] + (end[2] - from[2]) * f];
+        const ta = a + (j ? 0.9 : -0.9) + this.range(-0.3, 0.3), tl = this.range(0.5, 0.9);
+        const tip: V3 = [mid[0] + Math.cos(ta) * tl, mid[1] + this.range(0.1, 0.5), mid[2] + Math.sin(ta) * tl];
+        this.sphere.limb(mid, tip, 0.04, BARK, MAT.bark, 0, 0.025);
+        this.leafBall(tip[0], tip[1] + 0.1, tip[2], this.range(0.45, 0.7), tint, 0.85);
+      }
     }
     this.leafBall(top[0], top[1] + 0.9, top[2], this.range(1.1, 1.45), tint, 0.9);
     this.leafBall(top[0] + this.range(-0.5, 0.5), top[1] + 1.7, top[2] + this.range(-0.5, 0.5), this.range(0.75, 1.0), tint, 0.9);
@@ -519,13 +590,20 @@ export class Scenery {
   private conifer(x: number, z: number): void {
     const h = this.range(5.6, 6.6);
     this.sphere.limb([x, -0.1, z], [x, h * 0.55, z], 0.2, BARK, MAT.bark, 0, 0.12);
-    const tiers = 5;
-    for (let k = 0; k < tiers; k++) {
-      const t = k / (tiers - 1);
-      const y = 1.5 + t * (h - 2.3), w = (2.9 - t * 2.1) * this.range(0.9, 1.1), th = 1.9 - t * 0.5;
-      const yaw = this.range(0, 6.28);
-      this.cones.box(x, y + th / 2, z, w * 0.82, th * 0.9, w * 0.82, [PINE[0] * 0.4, PINE[1] * 0.4, PINE[2] * 0.4], MAT.leaves, 0, 0, yaw);
-      this.cones.box(x, y + th / 2, z, w, th, w, PINE, MAT.leaves, 0, FLAG_FOLIAGE, yaw);
+    this.sphere.limb([x, h * 0.5, z], [x, h + 0.3, z], 0.12, BARK, MAT.bark, 0, 0.03);
+    // A dark inner cone for density, then whorls of drooping boughs, long at the bottom and
+    // short near the top.
+    this.cones.box(x, 1.2 + (h - 1.2) / 2, z, 2.4, h - 1.0, 2.4, [PINE[0] * 0.3, PINE[1] * 0.3, PINE[2] * 0.3], MAT.leaves, 0, 0, this.range(0, 6.28));
+    const whorls = 9;
+    for (let k = 0; k < whorls; k++) {
+      const t = k / (whorls - 1);
+      const y = 1.3 + t * (h - 1.1), len = (1.9 - t * 1.55) * this.range(0.9, 1.1);
+      const n = 7 + Math.round((1 - t) * 4);
+      const turn = this.range(0, 6.28);
+      for (let j = 0; j < n; j++) {
+        const shade = this.range(0.8, 1.1);
+        this.fronds.box(x, y, z, len, len, len, [PINE[0] * shade, PINE[1] * shade, PINE[2] * shade], MAT.leaves, 0, FLAG_FOLIAGE, turn + (j / n) * 6.28 + this.range(-0.15, 0.15), 0, this.range(-0.1, 0.2));
+      }
     }
     this.underTree(x, z, PINE);
   }
@@ -550,26 +628,168 @@ export class Scenery {
     this.bush(x, z, size);
   }
 
-  /** A patch of earth and short grass: overlapping discs make an irregular outline. */
+  /**
+   * A patch of earth and grass: ragged soil shapes, grass that is thick in the middle and thins
+   * out at the edges, weeds among it, and the odd longer clump.
+   */
   private turf(x: number, z: number, r: number): void {
-    const discs = 3 + Math.floor(this.rnd() * 2);
-    for (let k = 0; k < discs; k++) {
-      const a = this.range(0, 6.28), d = k ? this.range(0.3, 0.7) * r : 0, rr = (k ? this.range(0.45, 0.75) : 1) * r;
+    const pieces = 2 + Math.floor(this.rnd() * 2);
+    for (let k = 0; k < pieces; k++) {
+      const a = this.range(0, 6.28), d = k ? this.range(0.3, 0.6) * r : 0, rr = (k ? this.range(0.5, 0.8) : 1) * r;
       const cx = x + Math.cos(a) * d, cz = z + Math.sin(a) * d;
-      // Slightly different heights stop overlapping discs flickering against each other.
-      this.cylinder.box(cx, 0.008 + this.cylinder.n % 7 * 0.003, cz, rr * 2, 0.03, rr * 2 * this.range(0.75, 1), [1.6, 1.6, 1.5], MAT.ground, 0, 0, this.range(0, 6.28));
-      const tufts = Math.round(rr * rr * 5.5 * this.site.detail);
-      for (let t = 0; t < tufts; t++) {
-        const ta = this.range(0, 6.28), td = Math.sqrt(this.rnd()) * rr * 0.92;
-        this.tuft(cx + Math.cos(ta) * td, cz + Math.sin(ta) * td, 1);
-      }
+      const shade = this.range(0.85, 1.15);
+      this.patches.box(cx, 0.002 + (this.patches.n % 7) * 0.002, cz, rr * 2.2, 1, rr * 2.2 * this.range(0.7, 1), [1.5 * shade, 1.45 * shade, 1.3 * shade], MAT.ground, 0, 0, this.range(0, 6.28));
+    }
+    const count = Math.round(r * r * 16 * this.site.detail);
+    for (let t = 0; t < count; t++) {
+      const ta = this.range(0, 6.28), td = Math.pow(this.rnd(), 0.8) * r * 1.05;
+      // Shorter towards the edge.
+      const size = (1.15 - (td / r) * 0.6) * this.range(0.75, 1.15);
+      this.tuft(x + Math.cos(ta) * td, z + Math.sin(ta) * td, size);
+    }
+    for (let t = 0; t < Math.round(r * 2 * this.site.detail); t++) {
+      const ta = this.range(0, 6.28), td = Math.sqrt(this.rnd()) * r;
+      this.weed(x + Math.cos(ta) * td, z + Math.sin(ta) * td, this.range(0.7, 1.2));
     }
   }
 
   private tuft(x: number, z: number, size: number): void {
     if (this.site.solidAt(x, z)) return;
-    const w = this.range(0.45, 0.85) * size, h = this.range(0.22, 0.55) * size;
-    this.tufts.box(x, 0.02, z, w, h, w, this.pick(GRASS), -1, 0, FLAG_FOLIAGE, this.range(0, 6.28), 0, 0, 0, 0.75);
+    const w = this.range(0.5, 0.85) * size, h = this.range(0.3, 0.6) * size;
+    (this.rnd() < 0.5 ? this.clumps : this.clumpsB).box(x, 0.0, z, w, h, w, this.pick(GRASS), -1, 0, GRASSY, this.range(0, 6.28), 0, 0, 0, 0.8);
+  }
+
+  private weed(x: number, z: number, size: number): void {
+    if (this.site.solidAt(x, z)) return;
+    const w = this.range(0.6, 1.0) * size;
+    this.weeds.box(x, 0.01, z, w, w * this.range(0.6, 1.1), w, this.pick(WEED), -1, 0, GRASSY, this.range(0, 6.28), 0, 0, 0, 0.6);
+  }
+
+  /** Cracks across the slab: jagged dark lines with grass and weeds growing out of them. */
+  private cracks(): void {
+    const s = this.site;
+    const area = s.size[0] * s.size[1];
+    for (let k = 0; k < Math.round(area / 110); k++) {
+      let x = this.range(6, s.size[0] - 6), z = this.range(6, s.size[1] - 6);
+      if (s.solidAt(x, z)) continue;
+      let a = this.range(0, 6.28);
+      const segs = 3 + Math.floor(this.rnd() * 5);
+      for (let j = 0; j < segs; j++) {
+        a += this.range(-0.7, 0.7);
+        const len = this.range(0.4, 1.1);
+        const nx = x + Math.cos(a) * len, nz = z + Math.sin(a) * len;
+        if (s.solidAt(nx, nz)) break;
+        const w = this.range(0.015, 0.04) * (1 - j / segs * 0.6);
+        this.cube.box((x + nx) / 2, 0.004, (z + nz) / 2, len + w, 0.006, w, [0.02, 0.02, 0.02], -1, 0, FLAG_NOSHADOW, -a);
+        // A branch now and then.
+        if (this.rnd() < 0.25) {
+          const b = a + (this.rnd() < 0.5 ? 1 : -1) * this.range(0.6, 1.2), bl = this.range(0.2, 0.5);
+          this.cube.box(x + Math.cos(b) * bl / 2, 0.004, z + Math.sin(b) * bl / 2, bl, 0.006, w * 0.6, [0.03, 0.03, 0.03], -1, 0, FLAG_NOSHADOW, -b);
+        }
+        if (this.rnd() < 0.55 * s.detail) this.tuft(nx, nz, this.range(0.45, 0.8));
+        else if (this.rnd() < 0.2) this.weed(nx, nz, this.range(0.4, 0.7));
+        x = nx; z = nz;
+      }
+    }
+  }
+
+  /** Rubbish that collects in a place nobody cleans: paper, cans, bottles, tyres, pallets, cones. */
+  private litter(): void {
+    const s = this.site;
+    const area = s.size[0] * s.size[1];
+    const PAPER: RGB[] = [[0.9, 0.88, 0.8], [0.75, 0.72, 0.62], [0.6, 0.55, 0.45]];
+    const CAN: RGB[] = [[0.7, 0.1, 0.08], [0.15, 0.3, 0.6], [0.75, 0.75, 0.78], [0.2, 0.5, 0.2]];
+    for (let k = 0; k < Math.round(area / 14 * Math.max(0.4, s.detail)); k++) {
+      const x = this.range(6.5, s.size[0] - 6.5), z = this.range(6.5, s.size[1] - 6.5);
+      if (s.solidAt(x, z)) continue;
+      const roll = this.rnd(), yaw = this.range(0, 6.28);
+      if (roll < 0.45) {
+        // Paper and card, crumpled a little.
+        const w = this.range(0.12, 0.3);
+        this.cube.box(x, 0.006, z, w, 0.004, w * this.range(0.6, 1.4), this.pick(PAPER), MAT.fabric, 0, 0, yaw, this.range(-0.08, 0.08), this.range(-0.08, 0.08));
+      } else if (roll < 0.65) {
+        this.cylinder.box(x, 0.033, z, 0.066, 0.12, 0.066, this.pick(CAN), MAT.painted, 0, 0, yaw, Math.PI / 2, 0, 0.7, 0.4); // can on its side
+      } else if (roll < 0.75) {
+        this.sphere.box(x, 0.035, z, 0.07, 0.25, 0.07, [0.15, 0.35, 0.18], -1, 0, 0, yaw, Math.PI / 2, 0, 0, 0.1); // bottle
+      } else if (roll < 0.85) {
+        // Rubble: a few chunks of broken concrete.
+        for (let j = 0; j < 3 + Math.floor(this.rnd() * 4); j++) {
+          const sz = this.range(0.06, 0.2);
+          this.rocks.box(x + this.range(-0.35, 0.35), sz * 0.3, z + this.range(-0.35, 0.35), sz * 1.4, sz, sz * 1.1, [1.05, 1.03, 0.98], MAT.concrete, 0, 0, this.range(0, 6.28));
+        }
+      } else if (roll < 0.88 && this.clear(x, z, 0.6)) {
+        // An old tyre lying flat.
+        this.cylinder.box(x, 0.11, z, 0.7, 0.22, 0.7, [0.06, 0.06, 0.06], MAT.fabric, 0, 0, yaw, 0, 0, 0, 0.9);
+        this.cylinder.box(x, 0.115, z, 0.36, 0.23, 0.36, [0.02, 0.02, 0.02], -1);
+      } else if (roll < 0.91 && this.clear(x, z, 0.7)) {
+        // A broken pallet.
+        for (let j = -2; j <= 2; j++) this.cube.box(x + j * 0.24, 0.13, z, 0.1, 0.025, 1.1, [1.1, 0.95, 0.75], MAT.wood, 0, 0, yaw + (j === 1 ? 0.15 : 0));
+        for (const d of [-0.45, 0, 0.45]) this.cube.box(x, 0.06, z + d, 1.2, 0.1, 0.1, [1.0, 0.85, 0.65], MAT.wood, 0, 0, yaw);
+      } else if (roll < 0.93) {
+        // Traffic cone, sometimes knocked over.
+        const down = this.rnd() < 0.4;
+        this.cones.box(x, down ? 0.16 : 0.36, z, 0.32, 0.7, 0.32, [0.95, 0.35, 0.08], MAT.polymer, 0, 0, yaw, down ? Math.PI / 2 : 0);
+        if (!down) this.cube.box(x, 0.02, z, 0.42, 0.04, 0.42, [0.1, 0.1, 0.1], MAT.polymer, 0, 0, yaw);
+      } else if (roll < 0.96 && this.clear(x, z, 0.5)) {
+        // Cardboard box, soggy at the corners.
+        const w = this.range(0.35, 0.6);
+        this.cube.box(x, w * 0.35, z, w, w * 0.7, w * 0.8, [0.75, 0.55, 0.35], MAT.fabric, 0, 0, yaw, 0, this.range(-0.05, 0.05));
+      }
+    }
+  }
+
+  private clear(x: number, z: number, m: number): boolean {
+    const s = this.site;
+    return !s.solidAt(x, z) && !s.solidAt(x + m, z) && !s.solidAt(x - m, z) && !s.solidAt(x, z + m) && !s.solidAt(x, z - m);
+  }
+
+  /**
+   * Things overhead that move in the wind: cables slung across between buildings, banners and
+   * tarps on the walls.
+   */
+  private overhead(): void {
+    const s = this.site;
+    const spots = this.wallSpots();
+    // Cables: from a wall spot straight across the open floor to the facing wall.
+    let cables = 0;
+    for (const w of spots) {
+      if (cables > Math.round(spots.length / 14) || this.rnd() > 0.12) continue;
+      let len = 0;
+      while (len < 30 && !s.solidAt(w.x + w.nx * (len + 1), w.z + w.nz * (len + 1))) len += 1;
+      if (len < 5 || len >= 30) continue;
+      const y0 = this.range(5.2, 6.6), y1 = y0 + this.range(-0.6, 0.6);
+      const a: V3 = [w.x + w.nx * 0.1, y0, w.z + w.nz * 0.1], b: V3 = [w.x + w.nx * (len + 0.9), y1, w.z + w.nz * (len + 0.9)];
+      for (const off of [0, 0.25]) {
+        const da: V3 = [a[0] + w.nz * off, a[1] - off * 0.4, a[2] + w.nx * off], db: V3 = [b[0] + w.nz * off, b[1] - off * 0.4, b[2] + w.nx * off];
+        this.sphere.limb(da, db, 0.012, [0.05, 0.05, 0.05], -1, FLAG_CABLE, 0.012, [0, 1, 0], 0);
+      }
+      // Insulators at the ends; a lamp or a sign hung from some.
+      for (const p of [a, b]) this.cylinder.box(p[0], p[1], p[2], 0.08, 0.12, 0.08, [0.85, 0.85, 0.8], MAT.polymer);
+      cables++;
+    }
+    // Banners, faded flags and torn tarps on the walls.
+    const CLOTH: RGB[] = [[0.55, 0.12, 0.1], [0.12, 0.22, 0.45], [0.3, 0.38, 0.25], [0.6, 0.58, 0.5], [0.2, 0.3, 0.55]];
+    for (const w of spots) {
+      if (this.rnd() > 0.05) continue;
+      const c = this.pick(CLOTH);
+      const n: V3 = [w.nx, 0, w.nz], tan: V3 = [w.nz, 0, -w.nx];
+      if (this.rnd() < 0.5) {
+        // A banner hanging from a short pole that sticks out from the wall.
+        const y = this.range(4.2, 5.8), len = 1.5;
+        this.cylinder.box(w.x + w.nx * len / 2, y, w.z + w.nz * len / 2, 0.04, len, 0.04, [0.6, 0.6, 0.6], MAT.gunmetal, 0, 0, Math.atan2(w.nx, w.nz), Math.PI / 2);
+        const fw = 1.2, fh = this.range(1.0, 1.6);
+        this.sheet([w.x + w.nx * (len / 2 + 0.1), y - fh / 2 - 0.03, w.z + w.nz * (len / 2 + 0.1)], fh, [n[0] * fw, 0, n[2] * fw], tan, c);
+      } else {
+        // A tarp or banner hanging against the wall from its top edge.
+        const fw = this.range(1.4, 1.9), fh = this.range(1.2, 2.4), y = this.range(3.4, 5.8);
+        this.sheet([w.x + w.nx * 0.28, y - fh / 2, w.z + w.nz * 0.28], fh, [tan[0] * fw, 0, tan[2] * fw], n, c);
+      }
+    }
+  }
+
+  /** A sheet of cloth hanging from its top edge: `across` spans its width, `facing` its face. */
+  private sheet(centre: V3, height: number, across: V3, facing: V3, c: RGB): void {
+    this.cloth.mat([0, -height, 0, 0, across[0], across[1], across[2], 0, facing[0], facing[1], facing[2], 0, centre[0], centre[1], centre[2], 1], c, MAT.fabric, 0, 1, 0, FLAG_CLOTH);
   }
 
   /** The props that have collision: drawn where the simulation put their boxes. */
@@ -645,26 +865,34 @@ export class Scenery {
         for (let k = 0; k < strands; k++) {
           const len = drop * this.range(0.35, 1), shade = this.range(0.75, 1.1);
           const [ix, iz] = along(this.range(-1.1, 1.1), 0.08);
-          this.leaves.box(ix, 7.1 - len / 2, iz, this.range(0.5, 1.0), len, this.range(0.28, 0.4), [tint[0] * shade, tint[1] * shade, tint[2] * shade], MAT.leaves, 0, FLAG_FOLIAGE, yaw, 0, this.range(-0.12, 0.12));
+          this.canopy.box(ix, 7.1 - len / 2, iz, this.range(0.5, 1.0), len, this.range(0.3, 0.42), [tint[0] * 0.1 * shade, tint[1] * 0.2 * shade, tint[2] * 0.06 * shade], -1, 0, FLAG_FOLIAGE, yaw, 0, this.range(-0.12, 0.12), 0, 0.7);
         }
         const [cx, cz] = along(0, 0.1);
-        this.leaves.box(cx, 6.85, cz, 2.3, 0.9, 0.5, tint, MAT.leaves, 0, FLAG_FOLIAGE, yaw);
+        this.canopy.box(cx, 6.85, cz, 2.3, 0.9, 0.55, [tint[0] * 0.1, tint[1] * 0.2, tint[2] * 0.06], -1, 0, FLAG_FOLIAGE, yaw, 0, 0, 0, 0.7);
       } else if (roll < 0.32 * detail) {
         // Creeper climbing from the ground, with weeds at its foot.
         const tint = this.pick(LEAF_TINTS), rise = this.range(1.6, 3.4);
         for (let k = 0; k < 4; k++) {
           const len = rise * this.range(0.4, 1), shade = this.range(0.75, 1.1);
           const [ix, iz] = along(this.range(-0.8, 0.8), 0.08);
-          this.leaves.box(ix, len / 2 - 0.1, iz, this.range(0.6, 1.1), len, this.range(0.28, 0.4), [tint[0] * shade, tint[1] * shade, tint[2] * shade], MAT.leaves, 0, FLAG_FOLIAGE, yaw, 0, this.range(-0.15, 0.15));
+          this.canopy.box(ix, len / 2 - 0.1, iz, this.range(0.6, 1.1), len, this.range(0.3, 0.42), [tint[0] * 0.1 * shade, tint[1] * 0.2 * shade, tint[2] * 0.06 * shade], -1, 0, FLAG_FOLIAGE, yaw, 0, this.range(-0.15, 0.15), 0, 0.7);
         }
         for (let k = 0; k < 4; k++) { const [tx, tz] = along(this.range(-0.9, 0.9), this.range(0.25, 0.6)); this.tuft(tx, tz, 1.1); }
       } else if (roll < 0.42) {
         const [bx, bz] = along(this.range(-0.4, 0.4), this.range(0.55, 0.8));
         this.bushIfClear(bx, bz, this.range(0.7, 1.05));
       }
-      // Weeds in the crack where wall meets floor.
-      const weeds = Math.round(this.range(0, 3.4) * detail);
-      for (let k = 0; k < weeds; k++) { const [tx, tz] = along(this.range(-1, 1), this.range(0.12, 0.3)); this.tuft(tx, tz, 0.7); }
+      // Grass along the foot of the wall: a strip of soil and a run of clumps where wind and rain
+      // leave dirt, on about half the walls; weeds in the crack on the rest.
+      if (this.rnd() < 0.5) {
+        const [sx2, sz2] = along(0, 0.32);
+        if (!this.site.solidAt(sx2, sz2)) this.patches.box(sx2, 0.003, sz2, w.nx ? 0.9 : 2.3, 1, w.nx ? 2.3 : 0.9, [1.4, 1.35, 1.2], MAT.ground, 0, 0, this.range(-0.1, 0.1));
+        for (let k = 0; k < Math.round(9 * detail); k++) { const [tx, tz] = along(this.range(-1.05, 1.05), this.range(0.1, 0.55)); this.tuft(tx, tz, this.range(0.7, 1.2)); }
+        if (this.rnd() < 0.6) { const [tx, tz] = along(this.range(-0.9, 0.9), this.range(0.2, 0.5)); this.weed(tx, tz, this.range(0.8, 1.2)); }
+      } else {
+        const weeds = Math.round(this.range(1, 4) * detail);
+        for (let k = 0; k < weeds; k++) { const [tx, tz] = along(this.range(-1, 1), this.range(0.08, 0.25)); this.tuft(tx, tz, 0.65); }
+      }
       // Chips of fallen concrete.
       if (this.rnd() < 0.3) {
         const [rx, rz] = along(this.range(-0.9, 0.9), this.range(0.2, 0.6));
@@ -698,16 +926,18 @@ export class Scenery {
       if (p) this.turf(p[0], p[1], this.range(0.9, 1.9));
     }
     // Puddles: thin, dark and glossy, so they mirror the sky and the lamps.
-    for (let k = 0; k < Math.round(area / 260); k++) {
+    for (let k = 0; k < Math.round(area / 420); k++) {
       const p = spot(1.2);
       if (!p) continue;
-      const r = this.range(0.7, 1.5);
-      for (let j = 0; j < 2; j++) this.cylinder.box(p[0] + j * this.range(-0.6, 0.6), 0.004 + j * 0.002, p[1] + j * this.range(-0.6, 0.6), r * (j ? 1.1 : 2), 0.01, r * (j ? 0.9 : 1.4), [0.035, 0.04, 0.045], -1, 0, 0, this.range(0, 6.28), 0, 0, 0, 0.05);
+      const r = this.range(0.35, 0.9);
+      // A damp darker rim, then rippling water with a ragged outline.
+      this.patches.box(p[0], 0.002, p[1], r * 2.6, 1, r * 2, [0.45, 0.45, 0.47], MAT.concrete, 0, 0, this.range(0, 6.28));
+      for (let j = 0; j < 2; j++) this.patches.box(p[0] + j * this.range(-0.6, 0.6), 0.006 + j * 0.002, p[1] + j * this.range(-0.6, 0.6), r * (j ? 1.3 : 2.1), 1, r * (j ? 1.0 : 1.5), [0.03, 0.035, 0.04], -1, 0, FLAG_WATER, this.range(0, 6.28), 0, 0, 0, 0.05);
     }
     // Lone weeds pushing through cracks.
     for (let k = 0; k < Math.round((area / 9) * s.detail); k++) {
       const x = this.range(6.5, s.size[0] - 6.5), z = this.range(6.5, s.size[1] - 6.5);
-      this.tuft(x, z, this.range(0.5, 0.9));
+      if (this.rnd() < 0.75) this.tuft(x, z, this.range(0.4, 0.8)); else this.weed(x, z, this.range(0.5, 0.9));
     }
   }
 }

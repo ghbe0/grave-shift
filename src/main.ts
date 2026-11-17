@@ -302,6 +302,7 @@ class App {
     const session = new Session(this.sim, start, 0, null, null);
     this.session = session;
     this.scene = new Scene(this.renderer, this.sim, session, id => this.lookOf(id), params.has('detail') ? +params.get('detail')! : 1);
+    this.scene.lineup = params.has('lineup');
     const f = session.feet();
     const num = (k: string, d: number) => (params.has(k) ? +params.get(k)! : d);
     let yaw = 0, clear = -1;
