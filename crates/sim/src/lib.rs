@@ -211,6 +211,8 @@ pub extern "C" fn gs_map_info(h: u32) -> u32 {
         g.map.targets.iter().for_each(|t| v.extend_from_slice(&[t.0.x, t.0.y, t.0.z]));
         v.push(d.props.len() as f32);
         d.props.iter().for_each(|p| v.extend_from_slice(&[(p.1 + 0.5) * maps::CELL, p.3, (p.2 + 0.5) * maps::CELL, p.4]));
+        v.push(d.theme as f32);
+        v.push(d.gravity);
         v
     });
     out(&v)

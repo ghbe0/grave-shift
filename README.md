@@ -70,6 +70,12 @@ revive (hold) · Z tonic · 4/5/6 streaks · Tab scores · Esc pause
 
 ## Graphics and frame rate
 
+There are four maps, each with its own setting: **Foundry 9** (a steelworks at dusk), **Dry
+Dock** (a harbour at night, with a ship alongside and gantry cranes), **Mill Street** (a town
+street with shops, a yard and a warehouse you can walk through and climb onto) and **Tycho
+Outpost** (a lunar station: pressurised modules joined by a corridor, and low gravity out on the
+regolith).
+
 The levels are dressed with trees, bushes, ivy, grass, puddles, barrels, sandbags and boulders
 (trees and props stop bullets and block the way; leaves sway in the wind).
 

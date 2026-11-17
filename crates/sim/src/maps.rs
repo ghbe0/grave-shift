@@ -68,13 +68,17 @@ pub struct MapDef {
     pub props: &'static [(&'static str, f32, f32, f32, f32)],
     /// Roof slabs over interiors: (col0, row0, col1, row1, height of the underside), inclusive.
     pub roofs: &'static [(usize, usize, usize, usize, f32)],
+    /// Setting, which decides how the level is dressed: 0 steelworks, 1 harbour, 2 town, 3 lunar.
+    pub theme: u8,
+    /// Gravity multiplier in the open (under a roof it is always 1).
+    pub gravity: f32,
     pub sun: [f32; 3],
     pub sun_color: [f32; 3],
     pub sky: [f32; 3],
     pub fog: f32,
 }
 
-pub static MAPS: [MapDef; 3] = [
+pub static MAPS: [MapDef; 4] = [
     MapDef {
         name: "Foundry 9",
         rows: &[
@@ -132,6 +136,8 @@ pub static MAPS: [MapDef; 3] = [
         ],
         props: &[("generator", 28.0, 16.0, 0.0, 0.0)],
         roofs: &[],
+        theme: 0,
+        gravity: 1.0,
         // Dusk: low warm sun, long shadows, hazy horizon.
         sun: [-0.62, 0.34, 0.5],
         sun_color: [1.0, 0.58, 0.32],
@@ -171,6 +177,8 @@ pub static MAPS: [MapDef; 3] = [
         }],
         props: &[],
         roofs: &[],
+        theme: 1,
+        gravity: 1.0,
         // Night under a cold moon; the lamps do most of the lighting.
         sun: [0.45, 0.55, -0.5],
         sun_color: [0.36, 0.44, 0.62],
@@ -218,11 +226,62 @@ pub static MAPS: [MapDef; 3] = [
         }],
         props: &[],
         roofs: &[(3, 3, 14, 9, 3.6), (17, 3, 30, 9, 3.6), (15, 13, 30, 20, 4.4)],
+        theme: 2,
+        gravity: 1.0,
         // An overcast afternoon: soft high sun, pale sky, light haze.
         sun: [0.35, 0.8, 0.3],
         sun_color: [1.0, 0.96, 0.88],
         sky: [0.5, 0.58, 0.68],
         fog: 0.009,
+    },
+    MapDef {
+        name: "Tycho Outpost",
+        rows: &[
+            "##################################",
+            "################z#################",
+            "################b#################",
+            "###..........................T.###",
+            "###.T######w##..T..##w#######..###",
+            "###..#!.....t#.....#c......p#..###",
+            "###..#...h...#######........#..###",
+            "###..d..P...............P...d..###",
+            "###R.#.......#######..h..H..#..###",
+            "###..#......i#.....#c.......#.R###",
+            "###..##w#d####.....####d##w##..###",
+            "###............R...............###",
+            "#zb.P....S......P.....S..O...P.bz#",
+            "###...O........................###",
+            "###.......###w##d##w###...R....###",
+            "###.R.....#@..........#........###",
+            "###.......d....Hh..P..#........###",
+            "###.......#...P.......d.....R..###",
+            "###....R..#j......h..u#........###",
+            "###T......######d######.O.....T###",
+            "###........................S...###",
+            "########b################b########",
+            "########z################z########",
+            "##################################",
+        ],
+        doors: &[],
+        wallbuys: &[('!', 2), ('@', 3)],
+        perks: &[('i', 0), ('j', 1)],
+        zones: &[("Tycho Outpost", 3, 3, 30, 20)],
+        parts: &[],
+        targets: &[],
+        quests: &[QuestDef {
+            name: "Life Support",
+            steps: &[(Step::Power, "Throw the main breaker in the lab"), (Step::Round(6), "Hold the outpost to round 6")],
+            reward: Reward::Points(2500),
+        }],
+        props: &[],
+        roofs: &[(5, 4, 13, 10, 3.6), (19, 4, 28, 10, 3.6), (13, 6, 19, 8, 3.0), (10, 14, 22, 19, 4.6)],
+        theme: 3,
+        gravity: 0.4,
+        // The lunar surface: a hard low sun, black sky, no air to haze the distance.
+        sun: [0.7, 0.42, 0.35],
+        sun_color: [1.0, 0.98, 0.94],
+        sky: [0.012, 0.013, 0.018],
+        fog: 0.0015,
     },
 ];
 

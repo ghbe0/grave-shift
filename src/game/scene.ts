@@ -124,7 +124,7 @@ export class Scene {
     }
     this.placeLamps();
     this.scenery = new Scenery(renderer, this.cube, this.sphere, this.cylinder, {
-      boxes: b, size: session.mapInfo.size as [number, number], seed: session.start.map, detail,
+      boxes: b, size: session.mapInfo.size as [number, number], seed: session.start.map, detail, theme: session.mapInfo.theme,
       solidAt: (x, z) => this.solidAt(x, z), wallAt: (x, z) => this.wallAt(x, z),
     });
     // A barricade's boards span whichever way its opening is walled in.
@@ -153,6 +153,11 @@ export class Scene {
   }
   private addBox(batch: Batch, b: Float32Array, o: number): void {
     // 17: roof slab, 18: brick wall around a window or doorway.
+    // The moon's surface is grey regolith, not a poured floor.
+    if (b[o + 6] === 0 && this.session.mapInfo.theme === 3) {
+      batch.box((b[o] + b[o + 3]) / 2, (b[o + 1] + b[o + 4]) / 2, (b[o + 2] + b[o + 5]) / 2, b[o + 3] - b[o], b[o + 4] - b[o + 1], b[o + 5] - b[o + 2], [1.5, 1.5, 1.55], MAT.concrete);
+      return;
+    }
     const s = b[o + 6] === 17 ? { layer: MAT.concrete, tint: [0.8, 0.8, 0.82] as RGB } : b[o + 6] === 18 ? { layer: MAT.brick, tint: [1.25, 1.0, 0.9] as RGB } : SURFACES[b[o + 6]] ?? SURFACES[1];
     batch.box((b[o] + b[o + 3]) / 2, (b[o + 1] + b[o + 4]) / 2, (b[o + 2] + b[o + 5]) / 2, b[o + 3] - b[o], b[o + 4] - b[o + 1], b[o + 5] - b[o + 2], s.tint, s.layer);
   }
@@ -180,6 +185,8 @@ export class Scene {
     }
     const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, w = x1 - x0, d = z1 - z0;
     this.world.box(cx, y1 + 0.01, cz, w - 0.3, 0.02, d - 0.3, [0.35, 0.35, 0.37], MAT.floor);
+    // Deck plating inside a lunar module.
+    if (this.session.mapInfo.theme === 3) this.world.box(cx, 0.006, cz, w - 3.9, 0.012, d - 3.9, [0.8, 0.82, 0.86], MAT.floor);
     for (const [px, pz, sx, sz] of [[cx, z0 + 0.15, w, 0.3], [cx, z1 - 0.15, w, 0.3], [x0 + 0.15, cz, 0.3, d], [x1 - 0.15, cz, 0.3, d]]) this.world.box(px, y1 + 0.15, pz, sx, 0.3, sz, [0.75, 0.75, 0.75], MAT.concrete);
   }
 

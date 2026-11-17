@@ -481,6 +481,15 @@ impl Game {
         let (sp, kp) = (p.perks, p.kit_perks);
         let oc = Self::overclocked(p);
         let mut m = Mods::default();
+        // Low gravity in the open on some maps; modules with a roof keep normal gravity.
+        let def = self.map.def;
+        if def.gravity != 1.0 {
+            let (c, r) = ((p.ctl.pos.x / CELL).floor(), (p.ctl.pos.z / CELL).floor());
+            let roofed = def.roofs.iter().any(|f| c >= f.0 as f32 && c <= f.2 as f32 && r >= f.1 as f32 && r <= f.3 as f32 && p.ctl.pos.y < f.4);
+            if !roofed {
+                m.gravity = def.gravity;
+            }
+        }
         let mobility = p.arms.stats(&Combat::default()).map_or(1.0, |s| s.mobility);
         m.speed = mobility * (1.0 - 0.35 * p.arms.ads);
         if sp & SP_MARATHON != 0 {

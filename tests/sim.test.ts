@@ -12,7 +12,7 @@ describe('wasm core', () => {
   it('exposes the catalog and layout', () => {
     expect(sim.catalog.weapons.length).toBeGreaterThan(8);
     expect(sim.catalog.weapons[0].name).toBe('P-9 Sidearm');
-    expect(sim.catalog.maps.map(m => m.name)).toEqual(['Foundry 9', 'Dry Dock', 'Mill Street']);
+    expect(sim.catalog.maps.map(m => m.name)).toEqual(['Foundry 9', 'Dry Dock', 'Mill Street', 'Tycho Outpost']);
     expect(sim.catalog.maps[0].quests[0].steps.length).toBe(7);
     expect(sim.L.P.id).toBe(0);
     expect(sim.L.P['ctl.pos']).toBeGreaterThan(0);

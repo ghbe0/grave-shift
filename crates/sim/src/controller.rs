@@ -122,10 +122,12 @@ pub struct Mods {
     pub inf_thrust: bool,
     pub no_sprint: bool,
     pub frozen: bool,
+    /// Gravity multiplier (the moon's surface is about a sixth; the game uses a playable 0.4).
+    pub gravity: f32,
 }
 impl Default for Mods {
     fn default() -> Self {
-        Mods { speed: 1.0, thrust_regen: 1.0, slide_decel: 1.0, inf_thrust: false, no_sprint: false, frozen: false }
+        Mods { speed: 1.0, thrust_regen: 1.0, slide_decel: 1.0, inf_thrust: false, no_sprint: false, frozen: false, gravity: 1.0 }
     }
 }
 
@@ -289,7 +291,7 @@ impl Ctl {
                     self.slide_cd = 0.4;
                     self.crouched = held(B_CROUCH) || !self.can_stand(w);
                 }
-                self.vel.y -= GRAVITY * dt;
+                self.vel.y -= GRAVITY * m.gravity * dt;
             }
             MODE_WALL => {
                 self.wall_t += dt;
@@ -302,7 +304,7 @@ impl Ctl {
                 let target = WALL_SPEED * m.speed;
                 self.wall_s = if self.wall_s > target { approach(self.wall_s, target, 4.0 * dt) } else { target };
                 // Height is held (a slight sink), then gravity returns so runs end naturally.
-                let vy = if self.wall_t < 1.4 { approach(self.vel.y, -0.5, 6.0 * dt) } else { (self.vel.y - GRAVITY * 0.35 * dt).max(-4.0) };
+                let vy = if self.wall_t < 1.4 { approach(self.vel.y, -0.5, 6.0 * dt) } else { (self.vel.y - GRAVITY * m.gravity * 0.35 * dt).max(-4.0) };
                 if pressed(B_JUMP) {
                     self.vel = t * self.wall_s + n * WALL_JUMP_OUT + V3::UP * WALL_JUMP_UP;
                     self.mode = MODE_NORMAL;
@@ -362,7 +364,7 @@ impl Ctl {
                 if pressed(B_JUMP) && (self.grounded || (self.air_t < COYOTE && self.vel.y <= 0.0)) {
                     ev |= self.jump(w);
                 }
-                self.vel.y -= GRAVITY * dt;
+                self.vel.y -= GRAVITY * m.gravity * dt;
 
                 if !self.grounded && mz > 0.1 {
                     if self.vel.y > -14.0 {

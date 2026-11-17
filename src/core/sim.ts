@@ -200,7 +200,7 @@ export class Game {
     const d = this.sim.take(this.x.gs_map_info(this.h));
     let i = 12;
     const vecs = (stride: number) => { const n = d[i++]; const out = Array.from({ length: n }, (_, k) => Array.from(d.subarray(i + k * stride, i + (k + 1) * stride))); i += n * stride; return out; };
-    return { size: [d[0], d[1]], sun: [d[2], d[3], d[4]], sunColor: [d[5], d[6], d[7]], sky: [d[8], d[9], d[10]], fog: d[11], barricades: vecs(3), targets: vecs(3), props: vecs(4) };
+    return { size: [d[0], d[1]], sun: [d[2], d[3], d[4]], sunColor: [d[5], d[6], d[7]], sky: [d[8], d[9], d[10]], fog: d[11], barricades: vecs(3), targets: vecs(3), props: vecs(4), theme: d[i] ?? 0, gravity: d[i + 1] ?? 1 };
   }
   /** Distance a bullet travels before hitting static geometry. */
   raycast(o: ArrayLike<number>, d: ArrayLike<number>, max: number): number {
@@ -210,7 +210,7 @@ export class Game {
   }
 }
 
-export interface MapInfo { size: number[]; sun: number[]; sunColor: number[]; sky: number[]; fog: number; barricades: number[][]; targets: number[][]; props: number[][] }
+export interface MapInfo { size: number[]; sun: number[]; sunColor: number[]; sky: number[]; fog: number; barricades: number[][]; targets: number[][]; props: number[][]; /** 0 steelworks, 1 harbour, 2 town, 3 lunar. */ theme: number; gravity: number }
 
 /** A decoded world snapshot. Arrays are views into `raw`. */
 export interface Snap {
