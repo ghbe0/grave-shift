@@ -78,6 +78,7 @@ class App {
   private lobby: LobbyState | null = null;
   private session: Session | null = null;
   private scene: Scene | null = null;
+  private lastFoot = 0;
   private screen = 'loading';
   private back = 'main';
   private last = performance.now();
@@ -267,6 +268,8 @@ class App {
 
     const click = (id: string, fn: () => void) => { $(id).onclick = () => { this.sfx.unlock(); fn(); }; };
     click('btn-solo', () => this.startSolo());
+    // Every button and menu control ticks.
+    document.addEventListener('click', e => { if ((e.target as HTMLElement)?.closest?.('button, select, input[type=checkbox], summary')) this.sfx.ui(); }, true);
     click('btn-host', () => void this.hostParty());
     click('btn-join', () => {
       const code = normalizeCode($<HTMLInputElement>('join-code').value);
@@ -639,6 +642,10 @@ class App {
           case 1: fire(e[2], false); break;
           case 2: this.sfx.dry(); break;
           case 3: this.sfx.reload(cat.weapons[e[2]]?.reload ?? 2); break;
+          case 4: this.sfx.swing(); break;
+          case 5: this.sfx.swap(); break;
+          case 10: this.sfx.slide(); break;
+          case 13: this.sfx.toss(); break;
           case 6: case 11: this.sfx.jump(); break;
           case 7: this.sfx.land(); break;
           case 8: this.sfx.slide(); break;
@@ -653,8 +660,30 @@ class App {
       case V.msg: if (e[2] === s.selfId && e[1] < 4) this.sfx.deny(); break;
       case V.round: this.sfx.round(); break;
       case V.powerup: if (e[5]) this.sfx.powerup(); break;
-      case V.zattack: if (e[2] === s.selfId) this.sfx.hurt(); break;
+      case V.zattack: if (e[2] === s.selfId) { this.sfx.hurt(); this.sfx.maul(); } break;
       case V.spawn: if (Math.random() < 0.3) this.sfx.groan(); break;
+      case V.zdeath: if (Math.random() < 0.6) this.sfx.corpse(); break;
+      case V.melee: if (e[1] !== s.selfId) this.sfx.swing(); break;
+      case V.door: this.sfx.door(); break;
+      case V.power: this.sfx.power(); break;
+      case V.barr: this.sfx.board(e[2] < 0); break;
+      case V.crate: this.sfx.pickup(); break;
+      case V.ability: this.sfx.ability(); break;
+      case V.tonic: if (e[1] === s.selfId) this.sfx.tonic(); break;
+      case V.streak: this.sfx.radio(); break;
+      case V.pdown: this.sfx.down(); break;
+      case V.pdeath: if (e[1] === s.selfId) this.sfx.down(); break;
+      case V.revive: this.sfx.revive(); break;
+      case V.quest: this.sfx.objective(true); break;
+      case V.gameover: this.sfx.round(); break;
+      case V.obj: {
+        const mine = s.local()[this.sim.L.P.team];
+        if (e[1] === 1 || e[1] === 2) this.sfx.objective(e[3] === mine);
+        else if (e[1] === 3) this.sfx.objective(true);
+        else if ((e[1] === 4 || e[1] === 5 || e[1] === 6) && e[2] === s.selfId) this.sfx.pickup();
+        else if (e[1] === 7 && e[2] === s.selfId) this.sfx.deny();
+        break;
+      }
     }
   }
 
@@ -715,6 +744,11 @@ class App {
       const cur = me[P['arms.cur']];
       const stats = this.sim.gunStats(me[P[`arms.guns${cur}.id`]], me[P[`arms.guns${cur}.att`]], me[P[`arms.guns${cur}.tier`]]);
       this.zoom = 1 + ((stats?.zoom ?? 1) - 1) * me[P['arms.ads']];
+    }
+    // Footsteps follow the stride: one each time the walk cycle passes a footfall.
+    if (me.length && me[P.life] === 0 && me[P['ctl.grounded']] && me[P['ctl.bob_amp']] > 0.25 && me[P['ctl.mode']] === 0) {
+      const foot = Math.floor(me[P['ctl.bob_ph']] / Math.PI);
+      if (foot !== this.lastFoot) { this.lastFoot = foot; this.sfx.step(!!me[P['ctl.sprinting']]); }
     }
     const view = s.view(this.settings.fov);
     const frame = this.scene.build(view, dt, this.canvas.width / this.canvas.height, { fov: this.settings.fov, motionBlur: this.settings.blur, dof: this.settings.dof });

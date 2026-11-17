@@ -97,7 +97,9 @@ export class Sfx {
     g.gain.exponentialRampToValueAtTime(Math.max(peak, 0.0002), at + attack);
     g.gain.exponentialRampToValueAtTime(0.0001, at + attack + decay);
     g.connect(this.bus!);
-    if (wet > 0 && this.reverb) {
+    // Everything is heard in the same space: even dry sounds get a little of the room.
+    wet = Math.max(wet * 1.5, 0.14);
+    if (this.reverb) {
       const send = c.createGain();
       send.gain.value = wet;
       g.connect(send).connect(this.reverb);
@@ -291,6 +293,160 @@ export class Sfx {
     this.tone(c, t + 0.04, 'triangle', 330, 660, 0.2, 0.02, 0.4, 0.4);
     this.hiss(c, t, 'highpass', 5000, 0.5, 0.12, 0.05, 0.4, 0.3);
   }
+  /** A boot on concrete; sprinting lands harder. */
+  step(sprint: boolean): void {
+    const c = this.ready();
+    if (!c) return;
+    const t = c.currentTime, g = sprint ? 0.2 : 0.12, f = 0.9 + Math.random() * 0.25;
+    this.hiss(c, t, 'lowpass', 330 * f, 0.8, g, 0.004, 0.06);
+    this.hiss(c, t + 0.012, 'bandpass', 1700 * f, 1.2, g * 0.45, 0.002, 0.03);
+    this.tone(c, t, 'sine', 95 * f, 55, g * 0.9, 0.003, 0.05);
+  }
+  /** Bringing another weapon up: cloth, a sling rattle and the hand closing on the grip. */
+  swap(): void {
+    const c = this.ready();
+    if (!c) return;
+    const t = c.currentTime;
+    this.hiss(c, t, 'bandpass', 1200, 0.7, 0.16, 0.04, 0.16, 0, false, 500);
+    this.click(c, t + 0.14, 1700, 0.2, 0.03);
+    this.click(c, t + 0.24, 2400, 0.24, 0.03);
+  }
+  /** A blade through the air, and what it meets. */
+  swing(connected = false): void {
+    const c = this.ready();
+    if (!c) return;
+    const t = c.currentTime;
+    this.hiss(c, t, 'bandpass', 900, 1.2, 0.3, 0.04, 0.12, 0, false, 3200);
+    if (connected) { this.hiss(c, t + 0.1, 'lowpass', 900, 0.7, 0.5, 0.002, 0.08, 0, true); this.tone(c, t + 0.1, 'sine', 140, 60, 0.5, 0.002, 0.1); }
+  }
+  /** Pin, lever and the throw. */
+  toss(): void {
+    const c = this.ready();
+    if (!c) return;
+    const t = c.currentTime;
+    this.click(c, t, 3100, 0.22, 0.02);
+    this.click(c, t + 0.07, 2200, 0.2, 0.03);
+    this.hiss(c, t + 0.12, 'bandpass', 700, 1, 0.2, 0.05, 0.14, 0, false, 1800);
+  }
+  /** A heavy steel door grinding open. */
+  door(): void {
+    const c = this.ready();
+    if (!c) return;
+    const t = c.currentTime;
+    this.click(c, t, 900, 0.4, 0.06);
+    this.hiss(c, t + 0.05, 'bandpass', 260, 2.5, 0.5, 0.15, 1.1, 0.4, true, 180);
+    this.tone(c, t + 0.05, 'sawtooth', 62, 48, 0.25, 0.15, 1.0, 0.3);
+    this.tone(c, t + 1.15, 'sine', 80, 40, 0.7, 0.004, 0.25, 0.5);
+    this.hiss(c, t + 1.15, 'lowpass', 500, 0.7, 0.5, 0.004, 0.2, 0.5, true);
+  }
+  /** The main breaker thrown: a clunk, a rising hum, lights buzzing awake. */
+  power(): void {
+    const c = this.ready();
+    if (!c) return;
+    const t = c.currentTime;
+    this.click(c, t, 700, 0.6, 0.08);
+    this.tone(c, t, 'sine', 120, 50, 0.9, 0.003, 0.2, 0.5);
+    this.tone(c, t + 0.15, 'sawtooth', 30, 100, 0.22, 1.2, 1.8, 0.4);
+    this.tone(c, t + 0.15, 'sine', 60, 200, 0.2, 1.4, 1.6, 0.4);
+    for (let k = 0; k < 6; k++) this.hiss(c, t + 0.5 + k * 0.17 + Math.random() * 0.06, 'highpass', 5000, 0.5, 0.12, 0.002, 0.04, 0.3);
+  }
+  /** A board hammered back onto a barricade (or torn off it). */
+  board(torn = false): void {
+    const c = this.ready();
+    if (!c) return;
+    const t = c.currentTime, f = 0.9 + Math.random() * 0.2;
+    this.tone(c, t, 'triangle', 320 * f, 180 * f, 0.4, 0.002, 0.07, 0.2);
+    this.hiss(c, t, 'bandpass', 1100 * f, 1.5, 0.35, 0.002, 0.06, 0.2);
+    if (torn) this.hiss(c, t + 0.03, 'bandpass', 2300, 3, 0.25, 0.01, 0.16, 0.2, false, 900);
+  }
+  /** Picking something up: webbing and a buckle. */
+  pickup(): void {
+    const c = this.ready();
+    if (!c) return;
+    const t = c.currentTime;
+    this.hiss(c, t, 'bandpass', 1500, 0.8, 0.18, 0.02, 0.1);
+    this.click(c, t + 0.08, 2600, 0.24, 0.03);
+  }
+  /** An ability coming online: capacitors charging to a hard release. */
+  ability(): void {
+    const c = this.ready();
+    if (!c) return;
+    const t = c.currentTime;
+    this.tone(c, t, 'sawtooth', 110, 660, 0.25, 0.25, 0.1, 0.4);
+    this.hiss(c, t, 'bandpass', 800, 2, 0.25, 0.25, 0.1, 0.4, false, 4000);
+    this.tone(c, t + 0.3, 'sine', 160, 50, 0.8, 0.003, 0.3, 0.6);
+    this.hiss(c, t + 0.3, 'highpass', 3000, 0.5, 0.4, 0.002, 0.15, 0.6);
+  }
+  /** A tonic: cap off, a swallow, the kick. */
+  tonic(): void {
+    const c = this.ready();
+    if (!c) return;
+    const t = c.currentTime;
+    this.click(c, t, 3400, 0.2, 0.02);
+    this.hiss(c, t + 0.05, 'highpass', 6000, 0.5, 0.14, 0.01, 0.2);
+    this.tone(c, t + 0.3, 'sine', 180, 120, 0.3, 0.02, 0.1);
+    this.tone(c, t + 0.48, 'sine', 170, 110, 0.3, 0.02, 0.1);
+    this.tone(c, t + 0.7, 'sine', 90, 260, 0.18, 0.2, 0.5, 0.5);
+  }
+  /** A streak called in: radio squelch and a confirmation tone. */
+  radio(): void {
+    const c = this.ready();
+    if (!c) return;
+    const t = c.currentTime;
+    this.hiss(c, t, 'bandpass', 2200, 2.5, 0.3, 0.005, 0.09);
+    this.tone(c, t + 0.1, 'square', 880, 880, 0.1, 0.005, 0.07);
+    this.tone(c, t + 0.2, 'square', 1175, 1175, 0.1, 0.005, 0.1);
+    this.hiss(c, t + 0.33, 'bandpass', 2200, 2.5, 0.25, 0.005, 0.07);
+  }
+  /** Going down: the hit, the breath leaving, the fall. */
+  down(): void {
+    const c = this.ready();
+    if (!c) return;
+    const t = c.currentTime;
+    this.tone(c, t, 'sine', 110, 40, 0.9, 0.003, 0.35, 0.3);
+    this.hiss(c, t + 0.05, 'bandpass', 700, 1.5, 0.3, 0.05, 0.4, 0.2, false, 300);
+    this.hiss(c, t + 0.5, 'lowpass', 400, 0.7, 0.5, 0.004, 0.15, 0.3, true);
+  }
+  /** Back on your feet: a sharp breath in. */
+  revive(): void {
+    const c = this.ready();
+    if (!c) return;
+    const t = c.currentTime;
+    this.hiss(c, t, 'bandpass', 1200, 1.5, 0.3, 0.25, 0.1, 0.2, false, 2600);
+    this.tone(c, t + 0.3, 'sine', 70, 110, 0.4, 0.01, 0.2);
+  }
+  /** An objective changing hands (higher when it is good news). */
+  objective(good: boolean): void {
+    const c = this.ready();
+    if (!c) return;
+    const t = c.currentTime, f = good ? 1 : 0.75;
+    this.tone(c, t, 'sine', 70, 45, 0.6, 0.004, 0.3, 0.5);
+    this.tone(c, t, 'triangle', 196 * f, 196 * f, 0.22, 0.01, 0.35, 0.5);
+    this.tone(c, t + 0.12, 'triangle', (good ? 294 : 174) * f, (good ? 294 : 174) * f, 0.22, 0.01, 0.45, 0.5);
+  }
+  /** Menu buttons: a soft mechanical tick. */
+  ui(): void {
+    const c = this.ready();
+    if (c) this.click(c, c.currentTime, 1900, 0.12, 0.018);
+  }
+  /** Claws on you. */
+  maul(): void {
+    const c = this.ready();
+    if (!c) return;
+    const t = c.currentTime;
+    this.hiss(c, t, 'bandpass', 1400, 1.2, 0.35, 0.01, 0.1, 0, true, 500);
+    this.tone(c, t, 'sawtooth', 150 + Math.random() * 60, 80, 0.2, 0.01, 0.18, 0.3);
+  }
+  /** One of the dead dropping: a wet thud and a last rattle. */
+  corpse(): void {
+    const c = this.ready();
+    if (!c) return;
+    const t = c.currentTime, f = 0.85 + Math.random() * 0.3;
+    this.tone(c, t, 'sawtooth', 120 * f, 50, 0.14, 0.02, 0.3, 0.3);
+    this.hiss(c, t + 0.22, 'lowpass', 350, 0.7, 0.4, 0.004, 0.1, 0.3, true);
+    this.tone(c, t + 0.22, 'sine', 80, 40, 0.5, 0.004, 0.12, 0.3);
+  }
+
   /** The dead: a rasping, wavering moan. */
   groan(): void {
     const c = this.ready();
