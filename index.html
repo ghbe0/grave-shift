@@ -21,7 +21,10 @@
     <div id="reticle" hidden></div>
     <div id="markers"></div>
     <div id="objective"></div>
-    <div id="top-left"><div id="round"></div><div id="left"></div><div id="quest"></div></div>
+    <div id="compass"><div id="compass-tape"></div><i></i></div>
+    <div id="hit-dir"></div>
+    <div id="reload-ring" hidden><svg viewBox="0 0 60 60"><circle cx="30" cy="30" r="26" class="track"/><circle cx="30" cy="30" r="26" class="arc" id="reload-arc"/></svg><span>RELOADING</span></div>
+    <div id="top-left"><div id="round"></div><div id="clock-bar"><i id="clock-fill"></i></div><div id="left"></div><div id="horde-bar" hidden><i id="horde-fill"></i></div><div id="quest"></div></div>
     <div id="feed"></div>
     <div id="banner"></div>
     <div id="ping"></div>
@@ -29,14 +32,16 @@
     <div id="center-low"><div id="prompt"></div><div id="progress-track"><div id="progress"></div></div></div>
     <div id="bottom-left">
       <div id="perks"></div>
-      <div id="points"></div>
-      <div class="bar"><div id="health-fill"></div></div>
-      <div class="bar thin"><div id="thrust-fill"></div></div>
+      <div id="points-row"><div id="points"></div><div id="point-pops"></div></div>
+      <div class="vital"><span class="ico hp" aria-hidden="true"></span><div class="bar seg" id="health-bar"><div id="health-ghost"></div><div id="health-fill"></div></div><span id="health-num"></span></div>
+      <div class="vital"><span class="ico th" aria-hidden="true"></span><div class="bar thin cells" id="thrust-bar"><div id="thrust-fill"></div></div><span id="thrust-num"></span></div>
     </div>
     <div id="bottom-right">
-      <div id="ability"><span id="ability-name"></span><div class="bar thin"><div id="ability-fill"></div></div></div>
+      <div id="ability"><div id="ability-text"><span id="ability-name"></span><span id="ability-state"></span></div><div id="ability-ring"><span id="ability-pct"></span></div></div>
       <div id="weapon"></div>
-      <div><span id="ammo"></span> <span id="reserve"></span></div>
+      <div id="firemode"></div>
+      <div id="ammo-row"><span id="ammo"></span> <span id="reserve"></span></div>
+      <div id="mag"></div>
       <div id="equip"></div>
     </div>
     <div id="scoreboard" hidden></div>

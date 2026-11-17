@@ -1,5 +1,5 @@
 // In-match HUD drawn with DOM elements over the canvas.
-import type { Sim, Snap } from '../core/sim';
+import { fireMode, WEAPON_CLASSES, type Sim, type Snap } from '../core/sim';
 import { cardHtml, COLORS, DEFAULT_LOOK, reticleSvg, type Look } from '../game/look';
 import type { Session } from '../game/session';
 import { LADDER_RUNGS, MODES, TEAM_CSS, TEAM_NAMES } from '../game/rules';
@@ -21,7 +21,15 @@ export class Hud {
   /** Each player's customization, for calling cards on the scoreboard. */
   lookOf: (id: number) => Look = () => DEFAULT_LOOK;
 
-  constructor(private sim: Sim) {}
+  /** Last frame's values, to spot changes worth animating. */
+  private state = { gun: '', ammo: 0, hp: 1, thrust: 1, points: -1, round: '', shown: -1, banner: '', scoreA: 0, scoreB: 0, dirTimer: 0, clockMax: 0 };
+
+  constructor(private sim: Sim) {
+    // Compass tape: three turns of headings every 15 degrees, so it can scroll without a seam.
+    const names: Record<number, string> = { 0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: 'W', 315: 'NW' };
+    const cell = (d: number) => `<span class="${d % 90 === 0 ? 'major' : ''}">${names[d] ?? (d % 45 === 0 ? '' : d)}</span>`;
+    $('compass-tape').innerHTML = Array.from({ length: 72 }, (_, i) => cell((i * 15) % 360)).join('');
+  }
 
   /** Crosshair style and colour, and the sight reticle shown while aiming. */
   applyLook(look: Look): void {
@@ -153,24 +161,104 @@ export class Hud {
     $('ammo').textContent = w ? `${g('ammo')}` : '';
     $('reserve').textContent = w ? `/ ${Math.floor(g('reserve'))}` : '';
     $('ammo').classList.toggle('low', !!w && g('ammo') <= Math.max(1, w.mag * 0.25));
-    $('equip').textContent = `G ×${p[P['arms.lethal']]}  E ×${p[P['arms.tactical']]}`;
+    // Weapon name slides in on a swap; the ammo counter kicks with each shot.
+    const st = this.state;
+    const gunKey = `${cur}:${g('id')}`;
+    if (gunKey !== st.gun) { st.gun = gunKey; restart($('weapon'), 'swap'); st.ammo = g('ammo'); }
+    if (w && g('ammo') < st.ammo) restart($('ammo'), 'shot');
+    st.ammo = g('ammo');
+    $('firemode').textContent = w ? `${fireMode(w)} · ${WEAPON_CLASSES[w.cls] ?? ''}` : '';
+    // Magazine: one tick per round (a bar for belts and big magazines).
+    const mag = $('mag');
+    if (!w) setHtml('mag', '');
+    else {
+      const size = Math.max(1, Math.round(this.sim.gunStats(g('id'), g('att'), g('tier'))?.mag ?? w.mag));
+      const belt = size > 60;
+      mag.className = belt ? 'belt' : size > 36 ? 'wide' : '';
+      setHtml('mag', belt ? `<i style="--p:${Math.round((g('ammo') / size) * 100)}%"></i>` : Array.from({ length: size }, (_, i) => `<i class="${i < g('ammo') ? '' : 'off'}"></i>`).join(''));
+    }
+    const pips = (n: number, max: number, cls: string) => Array.from({ length: Math.max(max, n) }, (_, i) => `<i class="${cls}${i < n ? '' : ' off'}"></i>`).join('');
+    setHtml('equip', `<span class="eq"><b>G</b>${pips(p[P['arms.lethal']], 2, '')}</span><span class="eq"><b>E</b>${pips(p[P['arms.tactical']], 1, 'tac')}</span>`);
 
-    ($('health-fill') as HTMLElement).style.width = `${Math.max(0, (p[P.health] / p[P.max_health]) * 100)}%`;
-    ($('thrust-fill') as HTMLElement).style.width = `${p[P['ctl.thrust']] * 100}%`;
+    // Health: the bar drops at once, a pale ghost trails behind it; it shakes on a hit and pulses when low.
+    const hpFrac = Math.max(0, p[P.health] / (p[P.max_health] || 100));
+    const hb = $('health-bar');
+    ($('health-fill') as HTMLElement).style.width = `${hpFrac * 100}%`;
+    ($('health-ghost') as HTMLElement).style.width = `${hpFrac * 100}%`;
+    if (hpFrac < st.hp - 0.01) {
+      restart(hb, 'hit');
+      // Show where it came from.
+      const dir = $('hit-dir');
+      dir.style.rotate = `${((s.yaw - p[P.hit_yaw]) * 180) / Math.PI}deg`;
+      dir.classList.add('on');
+      clearTimeout(st.dirTimer);
+      st.dirTimer = window.setTimeout(() => dir.classList.remove('on'), 350);
+    }
+    hb.classList.toggle('heal', hpFrac > st.hp + 0.001 && hpFrac < 1);
+    hb.classList.toggle('low', hpFrac < 0.35 && p[P.life] === 0);
+    st.hp = hpFrac;
+    $('health-num').textContent = `${Math.ceil(p[P.health])}`;
+    const thrust = p[P['ctl.thrust']];
+    ($('thrust-fill') as HTMLElement).style.width = `${thrust * 100}%`;
+    $('thrust-num').textContent = `${Math.round(thrust * 100)}%`;
+    if (thrust <= 0.02 && st.thrust > 0.02) restart($('thrust-bar'), 'empty');
+    st.thrust = thrust;
+    // Reload ring round the crosshair.
+    const rl = p[P['arms.reload_t']];
+    const ring = $('reload-ring');
+    ring.hidden = !(rl > 0 && w && p[P.life] === 0);
+    if (!ring.hidden) ($('reload-arc') as unknown as SVGElement).style.strokeDashoffset = `${163.4 * Math.min(1, rl / Math.max(w!.reload, 0.1))}`;
+    // Compass tape.
+    const deg = ((((-s.yaw * 180) / Math.PI) % 360) + 360) % 360;
+    ($('compass-tape') as HTMLElement).style.transform = `translateX(${150 - 15 - (deg / 15 + 24) * 30}px)`;
     const ab = cat.abilities[p[P.ability]];
     const active = p[P.active_t] > 0;
-    ($('ability-fill') as HTMLElement).style.width = `${(active ? 1 : p[P.charge]) * 100}%`;
+    const abFrac = active && ab ? Math.min(1, p[P.active_t] / 30) : p[P.charge];
+    ($('ability-ring') as HTMLElement).style.setProperty('--p', `${ab ? abFrac : 0}`);
+    $('ability-pct').textContent = !ab ? '' : active ? `${Math.ceil(p[P.active_t])}s` : p[P.charge] >= 1 ? 'Q' : `${Math.floor(p[P.charge] * 100)}`;
+    $('ability-state').textContent = !ab ? '' : active ? 'Active' : p[P.charge] >= 1 ? 'Ready' : 'Charging';
+    $('ability').classList.toggle('active', active);
+    $('ability').style.visibility = ab ? 'visible' : 'hidden';
     $('ability').classList.toggle('ready', p[P.charge] >= 1 || active);
-    $('ability-name').textContent = ab ? `${ab.name}${p[P.charge] >= 1 ? ' [Q]' : ''}` : '';
+    $('ability-name').textContent = ab ? ab.name : '';
 
     const mode = s.start.mode, info = MODES[mode];
     const limit = hdr[H.score_limit];
-    $('points').textContent = survival ? `${p[P.points]}`
+    // Points count up to their new value, with the gain (or cost) floating off beside them.
+    const target = survival ? p[P.points] : p[P.score];
+    if (st.points < 0 || Math.abs(target - st.points) > 100000) { st.points = target; st.shown = target; }
+    if (target !== st.points) {
+      const delta = target - st.points;
+      const pop = document.createElement('span');
+      pop.textContent = `${delta > 0 ? '+' : ''}${delta}`;
+      if (delta < 0) pop.className = 'neg';
+      const pops = $('point-pops');
+      pops.append(pop);
+      setTimeout(() => pop.remove(), 950);
+      while (pops.childElementCount > 5) pops.firstElementChild!.remove();
+      if (delta > 0) restart($('points'), 'bump');
+      st.points = target;
+    }
+    st.shown += (target - st.shown) * 0.25;
+    if (Math.abs(target - st.shown) < 1) st.shown = target;
+    const counted = Math.round(st.shown);
+    $('points').textContent = survival ? `${counted}`
       : mode === 6 ? `Rung ${Math.min(p[P.stage] + 1, LADDER_RUNGS)} / ${LADDER_RUNGS}`
-      : info?.teams ? `${p[P.score]}`
+      : info?.teams ? `${counted}`
       : `${p[P.kills]}${limit ? ` / ${limit}` : ''}`;
     // No time limit: the clock counts up instead.
-    $('round').textContent = survival ? `${hdr[H.round] || ''}` : hdr[H.timer] < 0 ? fmtTime(hdr[H.time]) : fmtTime(hdr[H.timer]);
+    const roundText = survival ? `${hdr[H.round] || ''}` : hdr[H.timer] < 0 ? fmtTime(hdr[H.time]) : fmtTime(hdr[H.timer]);
+    const roundEl = $('round');
+    roundEl.textContent = roundText;
+    // A new round number slams in; the last half minute of a match pulses red.
+    if (survival && roundText !== st.round) { st.round = roundText; restart(roundEl, 'pulse'); }
+    roundEl.classList.toggle('urgent', !survival && hdr[H.phase] === 1 && hdr[H.timer] >= 0 && hdr[H.timer] < 30);
+    // Under the clock: time left in the match, or how much of the horde remains this round.
+    const clock = $('clock-bar'), horde = $('horde-bar');
+    clock.hidden = survival || hdr[H.timer] < 0 || hdr[H.phase] !== 1;
+    if (!clock.hidden) { st.clockMax = Math.max(st.clockMax, hdr[H.timer]); ($('clock-fill') as HTMLElement).style.width = `${(hdr[H.timer] / Math.max(st.clockMax, 1)) * 100}%`; }
+    horde.hidden = !(survival && hdr[H.phase] === 1);
+    if (!horde.hidden) ($('horde-fill') as HTMLElement).style.width = `${Math.min(1, hdr[H.left] / Math.max(1, this.sim.zombieCount(hdr[H.round], snap.players.length))) * 100}%`;
     this.objectiveBar(s, snap, p);
     this.markers(s, snap, project);
     $('left').textContent = survival ? (hdr[H.phase] === 1 ? `${hdr[H.left]} left` : hdr[H.phase] === 3 ? '' : `Next round in ${Math.ceil(hdr[H.timer])}`) : hdr[H.phase] === 0 ? `Starting in ${Math.ceil(hdr[H.timer])}` : '';
@@ -220,7 +308,8 @@ export class Hud {
 
     this.feed = this.feed.filter(f => f.until > now);
     setHtml('feed', this.feed.map(f => `<div>${escapeHtml(f.text)}</div>`).join(''));
-    $('banner').textContent = this.banner.until > now ? this.banner.text : '';
+    const bannerText = this.banner.until > now ? this.banner.text : '';
+    if (bannerText !== st.banner) { st.banner = bannerText; $('banner').textContent = bannerText; if (bannerText) restart($('banner'), 'show'); }
 
     $('scoreboard').hidden = !scoreboard && hdr[H.phase] !== 3;
     if (!$('scoreboard').hidden) {
@@ -250,7 +339,7 @@ export class Hud {
     if (!info || mode === 0) { setHtml('objective', ''); return; }
     const limit = hdr[H.score_limit];
     const mine = p[P.team];
-    const side = (t: number, score: number) => `<div class="side${t === mine ? ' mine' : ''}" style="--team:${TEAM_CSS[t]}"><small>${TEAM_NAMES[t]}</small>${score}</div>`;
+    const side = (t: number, score: number) => `<div class="side${t === mine ? ' mine' : ''}" style="--team:${TEAM_CSS[t]}"><small>${TEAM_NAMES[t]}</small>${score}<u style="width:${limit ? Math.min(100, (score / limit) * 100) : 0}%"></u></div>`;
     const parts: string[] = [];
     if (info.teams) {
       parts.push(side(0, hdr[H.score_a]));
@@ -315,6 +404,13 @@ export class Hud {
 }
 
 const zoneOf = (a: number) => { const q = Math.floor(a / 4); return { owner: Math.floor(q / 2) - 1, contested: q % 2 === 1, prog: a - q * 4 - 1 }; };
+
+/** Replays a CSS animation class on an element. */
+function restart(el: HTMLElement, cls: string): void {
+  el.classList.remove(cls);
+  void el.offsetWidth;
+  el.classList.add(cls);
+}
 
 const cache = new Map<string, string>();
 /** Only touches the DOM when the markup actually changed. */

@@ -249,3 +249,111 @@ body.touch-play #objective { top: 86px; transform: translateX(-50%) scale(0.8); 
 #binds .bind { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--text); font-size: 13px; }
 #binds button { min-width: 108px; padding: 4px 8px; font-size: 12px; }
 #binds button.listening { border-color: var(--accent); color: var(--accent); }
+
+/* ---- Detailed, animated HUD ---- */
+.vital { display: grid; grid-template-columns: 18px 1fr 44px; align-items: center; gap: 8px; }
+.ico { width: 16px; height: 16px; display: inline-block; opacity: 0.9; }
+.ico.hp { background: linear-gradient(#fff, #fff) center / 100% 30% no-repeat, linear-gradient(#fff, #fff) center / 30% 100% no-repeat; }
+.ico.th { clip-path: polygon(50% 0, 100% 62%, 68% 62%, 68% 100%, 32% 100%, 32% 62%, 0 62%); background: #7fd4ff; }
+#health-bar, #thrust-bar { position: relative; overflow: hidden; border: 1px solid #ffffff30; background: #0009; box-shadow: 0 0 0 1px #000a, inset 0 1px 3px #000c; }
+#health-bar { height: 12px; border-radius: 2px; transform: skewX(-12deg); }
+#health-bar::after, #thrust-bar::after { content: ''; position: absolute; inset: 0; background: repeating-linear-gradient(90deg, transparent 0 calc(10% - 1px), #000c calc(10% - 1px) 10%); pointer-events: none; }
+#thrust-bar { height: 7px; transform: skewX(-12deg); }
+#health-fill, #health-ghost, #thrust-fill { position: absolute; left: 0; top: 0; bottom: 0; }
+#health-fill { background: linear-gradient(#ff8e7c, #e24a3b 45%, #a12a20); transition: width 0.12s ease-out; }
+#health-ghost { background: #fff3c4; opacity: 0.85; transition: width 0.7s 0.25s ease-in; }
+#health-bar.low #health-fill { animation: lowpulse 0.6s ease-in-out infinite alternate; }
+#health-bar.hit { animation: shake 0.25s; }
+#health-bar.heal #health-fill { background: linear-gradient(#b9ffb0, #55c65a 45%, #2a8a35); }
+#thrust-fill { background: linear-gradient(#bfeaff, #53c7ff 50%, #2a86c8); transition: width 0.08s linear; }
+#thrust-bar.empty { animation: emptyflash 0.35s 2; }
+#health-num, #thrust-num { font-weight: 700; font-size: 14px; text-align: right; }
+#thrust-num { font-size: 11px; color: var(--dim); }
+@keyframes lowpulse { from { filter: brightness(0.75); } to { filter: brightness(1.5); } }
+@keyframes shake { 0%, 100% { translate: 0; } 25% { translate: -4px 1px; } 50% { translate: 3px -1px; } 75% { translate: -2px; } }
+@keyframes emptyflash { 50% { border-color: #ff5a4a; box-shadow: 0 0 8px #ff5a4a; } }
+#points-row { position: relative; display: flex; align-items: baseline; gap: 10px; }
+#points.bump { animation: bump 0.25s; }
+@keyframes bump { 40% { scale: 1.18; color: #fff3a0; } }
+#point-pops { position: relative; height: 1em; flex: 1; }
+#point-pops span { position: absolute; left: 0; bottom: 0; font-weight: 700; color: #ffe27a; animation: pop 0.9s ease-out forwards; white-space: nowrap; }
+#point-pops span.neg { color: #ff7a6a; }
+@keyframes pop { from { opacity: 0; translate: 0 6px; } 15% { opacity: 1; } to { opacity: 0; translate: 26px -26px; } }
+/* Ability ring */
+#ability { width: auto; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+#ability-text { display: grid; text-align: right; line-height: 1.15; }
+#ability-state { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); }
+#ability-ring { --p: 0; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: conic-gradient(var(--accent) calc(var(--p) * 1turn), #ffffff22 0); position: relative; }
+#ability-ring::before { content: ''; position: absolute; inset: 4px; border-radius: 50%; background: #0b0e12e6; }
+#ability-pct { position: relative; font-size: 11px; font-weight: 700; color: var(--text); }
+#ability.ready #ability-ring { animation: ready 0.9s ease-in-out infinite alternate; }
+#ability.ready #ability-state { color: var(--accent); }
+#ability.active #ability-ring { background: conic-gradient(#7fd4ff calc(var(--p) * 1turn), #ffffff22 0); }
+@keyframes ready { from { box-shadow: 0 0 0 0 #ff7a2f00; } to { box-shadow: 0 0 14px 2px #ff7a2fb0; } }
+/* Weapon block */
+#weapon { font-weight: 600; color: var(--text); letter-spacing: 0.3px; }
+#weapon.swap { animation: swapin 0.35s ease-out; }
+@keyframes swapin { from { opacity: 0; translate: 14px 0; } }
+#firemode { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--dim); }
+#ammo-row { line-height: 1; }
+#ammo.shot { animation: kick 0.09s; }
+@keyframes kick { 50% { translate: 0 2px; scale: 1.06; } }
+#ammo.low { animation: lowammo 0.5s ease-in-out infinite alternate; }
+@keyframes lowammo { to { opacity: 0.55; } }
+#mag { display: flex; justify-content: flex-end; gap: 2px; flex-wrap: wrap-reverse; max-width: 250px; margin-left: auto; min-height: 12px; }
+#mag i { width: 3px; height: 11px; background: #f2e2b0; border-radius: 1px 1px 0 0; box-shadow: 0 0 2px #0008; }
+#mag i.off { background: #ffffff1f; }
+#mag.wide i { width: 2px; height: 8px; gap: 1px; }
+#mag.belt { display: block; height: 6px; width: 220px; background: #ffffff1f; border-radius: 3px; overflow: hidden; }
+#mag.belt i { display: block; width: var(--p); height: 100%; background: #f2e2b0; border-radius: 0; transition: width 0.06s linear; }
+#equip { display: flex; justify-content: flex-end; gap: 12px; align-items: center; }
+#equip .eq { display: inline-flex; align-items: center; gap: 4px; }
+#equip .eq b { font-size: 10px; border: 1px solid #ffffff55; border-radius: 3px; padding: 0 4px; color: var(--text); }
+#equip .eq i { width: 7px; height: 10px; border-radius: 3px 3px 2px 2px; background: #c8d1dc; }
+#equip .eq i.tac { border-radius: 50%; height: 8px; width: 8px; background: #7fd4ff; }
+#equip .eq i.off { background: #ffffff1f; }
+/* Clock and round */
+#round { transition: color 0.3s; }
+#round.pulse { animation: roundin 0.9s ease-out; }
+#round.urgent { color: #ff5a4a; animation: lowammo 0.5s ease-in-out infinite alternate; }
+@keyframes roundin { from { scale: 1.7; opacity: 0; filter: blur(4px); } 60% { scale: 0.95; } }
+#clock-bar, #horde-bar { width: 150px; height: 4px; background: #ffffff1f; border-radius: 2px; overflow: hidden; margin: 5px 0 4px; }
+#clock-fill { display: block; height: 100%; width: 100%; background: linear-gradient(90deg, #d23c2a, #ffb36b); transition: width 0.4s linear; }
+#horde-fill { display: block; height: 100%; background: linear-gradient(90deg, #7a1d14, #d23c2a); transition: width 0.3s ease-out; }
+#clock-bar[hidden], #horde-bar[hidden] { display: none; }
+/* Reload ring round the crosshair */
+#reload-ring { position: absolute; left: 50%; top: 50%; width: 60px; height: 60px; margin: -30px; }
+#reload-ring svg { width: 100%; height: 100%; rotate: -90deg; }
+#reload-ring circle { fill: none; stroke-width: 3; }
+#reload-ring .track { stroke: #ffffff26; }
+#reload-ring .arc { stroke: #fff; stroke-linecap: round; stroke-dasharray: 163.4; stroke-dashoffset: 163.4; }
+#reload-ring span { position: absolute; left: 50%; top: 68px; translate: -50%; font-size: 10px; letter-spacing: 2px; color: var(--dim); white-space: nowrap; }
+/* Where the last hit came from */
+#hit-dir { position: absolute; left: 50%; top: 50%; width: 220px; height: 220px; margin: -110px; border-radius: 50%; opacity: 0; background: conic-gradient(from -22deg, #ff3b30e0 0 44deg, transparent 44deg); -webkit-mask: radial-gradient(circle, transparent 62%, #000 63% 70%, transparent 71%); mask: radial-gradient(circle, transparent 62%, #000 63% 70%, transparent 71%); transition: opacity 0.5s; }
+#hit-dir.on { opacity: 1; transition: opacity 0.05s; }
+/* Compass tape */
+#compass { position: absolute; left: 50%; top: 6px; width: 300px; height: 20px; margin-left: -150px; overflow: hidden; -webkit-mask: linear-gradient(90deg, transparent, #000 25% 75%, transparent); mask: linear-gradient(90deg, transparent, #000 25% 75%, transparent); font-size: 11px; color: #ffffffcc; }
+#compass-tape { position: absolute; top: 0; left: 0; height: 100%; white-space: nowrap; will-change: transform; }
+#compass-tape span { display: inline-block; width: 30px; text-align: center; }
+#compass-tape span.major { font-weight: 700; color: #fff; }
+#compass > i { position: absolute; left: 50%; top: 14px; width: 0; height: 0; margin-left: -4px; border: 4px solid transparent; border-bottom-color: var(--accent); }
+body.touch-play #compass { display: none; }
+/* Feed, banner, prompt, hit marker, chips */
+#feed div { animation: feedin 0.25s ease-out; background: linear-gradient(270deg, #000a, transparent); padding: 1px 8px 1px 18px; border-right: 2px solid var(--accent); }
+@keyframes feedin { from { opacity: 0; translate: 20px 0; } }
+#banner { animation: none; }
+#banner.show { animation: bannerin 0.45s cubic-bezier(.2, .9, .3, 1.2); }
+#banner.show::after { content: ''; display: block; height: 2px; width: 220px; margin: 6px auto 0; background: linear-gradient(90deg, transparent, var(--accent), transparent); animation: sweep 0.6s ease-out; }
+@keyframes bannerin { from { opacity: 0; scale: 1.25; letter-spacing: 8px; } }
+@keyframes sweep { from { width: 0; } }
+#hitmarker:not([hidden]) { animation: hit 0.14s ease-out; }
+@keyframes hit { from { scale: 1.9; opacity: 0.4; } }
+#progress-track { background: #ffffff1f; border-radius: 3px; overflow: hidden; height: 6px; }
+#progress-track:has(#progress[style*="width: 0"]) { visibility: hidden; }
+#progress { background: linear-gradient(90deg, var(--accent), #ffd08a); transition: width 0.1s linear; }
+.chip { animation: chipin 0.3s ease-out; }
+@keyframes chipin { from { opacity: 0; scale: 0.7; } }
+#objective .side { position: relative; overflow: hidden; }
+#objective .side u { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--team); transition: width 0.4s ease-out; text-decoration: none; }
+#objective .side.scored { animation: bump 0.3s; }
+body.touch-play #mag, body.touch-play #firemode { display: none; }
