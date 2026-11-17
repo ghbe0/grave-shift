@@ -90,6 +90,9 @@ export class Scene {
   private animVel = { sprint: 0, reload: 0, lower: 0, melee: 0, crouch: 0, fall: 0, strafe: 0 };
   private barrAxis: boolean[];
   private staticLights: LightSrc[] = [];
+  /** Per-zombie animation state, and the bodies of the recently killed. */
+  private zanim = new Map<number, { phase: number; yaw: number; speed: number; attack: number; flinch: number; x: number; z: number; hp: number; kind: number; seen: number }>();
+  private corpses: { id: number; x: number; y: number; z: number; yaw: number; kind: number; t: number; rec: Float32Array }[] = [];
   private switchAt: { x: number; z: number; nx: number; nz: number } | null = null;
   private lever = 0;
   private leverVel = 0;
@@ -303,6 +306,11 @@ export class Scene {
       const sw = this.switchAt;
       for (let k = 0; k < 8; k++) this.flashes.push({ pos: [sw.x + sw.nx * 0.42, 1.2, sw.z + sw.nz * 0.42], t: 0.3 + Math.random() * 0.3, life: 0.6, color: [0.7, 0.85, 1], radius: 0, size: 0.04, glow: 8, vel: [sw.nx * 2 + (Math.random() - 0.5) * 3, 1 + Math.random() * 3, sw.nz * 2 + (Math.random() - 0.5) * 3] });
       this.flashes.push({ pos: [sw.x + sw.nx * 0.5, 1.3, sw.z + sw.nz * 0.5], t: 0.15, life: 0.15, color: [0.7, 0.85, 1], radius: 9, size: 0.2, glow: 8 });
+    } else if (e[0] === V.zdeath && this.zanim.has(e[1]) && this.corpses.length < 24) {
+      const a = this.zanim.get(e[1])!;
+      const rec = new Float32Array(this.sim.L.Z._len);
+      this.corpses.push({ id: e[1], x: a.x, y: e[3], z: a.z, yaw: a.yaw, kind: a.kind, t: 0, rec });
+      this.flashes.push({ pos: [e[2], e[3] + 1, e[4]], t: 0.18, life: 0.18, color: [0.5, 0.04, 0.03], radius: 0, size: 0.4 });
     } else if (e[0] === V.zdeath) {
       this.flashes.push({ pos: [e[2], e[3] + 1, e[4]], t: 0.18, life: 0.18, color: [0.5, 0.04, 0.03], radius: 0, size: 0.6 });
     } else if (e[0] === V.powerup && e[5] === 1) {
@@ -368,63 +376,131 @@ export class Scene {
    * An undead body: hunched, arms reaching, a dragging gait whose speed and violence grow with its
    * kind (0 walker, 1 runner, 2 sprinter). Built from stretched spheres so the silhouette is round.
    */
-  private zombie(out: Batch, glow: Batch, z: { id: number; x: number; y: number; z: number; yaw: number; rec: Float32Array }, state: number, kind: number, t: number): void {
+  /**
+   * One of the dead. Each keeps a little animation state so it moves like a body rather than a
+   * puppet: the stride advances with the ground actually covered (feet do not slide), turning,
+   * speed and the attack ease in and out, hits make it flinch, and every one has its own height,
+   * build, slouch, complexion and wounds. `fall` (0..1) tips it over backwards for a death.
+   */
+  private zombie(out: Batch, glow: Batch, z: { id: number; x: number; y: number; z: number; yaw: number; rec: Float32Array }, state: number, kind: number, t: number, dt = 0, fall = 0): void {
     const turned = state === 4;
+    // Stable per-zombie variation.
+    const hsh = (n: number) => { let h = Math.imul(z.id * 2654435761 + n * 40503, 2246822519) >>> 0; h ^= h >>> 13; return (h % 1000) / 1000; };
+    const tall = 0.93 + hsh(1) * 0.15, broad = 0.9 + hsh(2) * 0.25, slouch = hsh(3), limp = hsh(4) < 0.35 ? (hsh(5) < 0.5 ? -1 : 1) : 0;
+    const oneArm = hsh(6) < 0.18 ? (hsh(7) < 0.5 ? -1 : 1) : 0;
     const rag = RAGS[z.id % RAGS.length];
-    const skinTint: RGB = turned ? [1.0, 1.2, 1.8] : [1.5, 1.5, 1.45];
-    const rise = state === 0 ? -1.1 + Math.min(1, Math.max(0, 1 - (z.rec[this.sim.L.Z.hp] ?? 1))) : 0;
-    const rate = [3.2, 6.5, 9.0][kind] ?? 3.2;
-    const ph = t * rate + z.id * 1.7;
-    const amp = [0.38, 0.6, 0.75][kind] ?? 0.4;
-    const lean = [0.5, 0.62, 0.78][kind] ?? 0.5;
-    const lurch = Math.sin(ph * 0.5 + z.id) * 0.06;
-    const bob = Math.abs(Math.sin(ph)) * 0.05 * (1 + kind * 0.5);
-    const { at, right } = frame(z.x, z.y + rise, z.z, z.yaw + lurch);
-    const hip = 0.93 + bob;
-    const chestL: [number, number, number] = [lurch * 0.3, hip + Math.cos(lean) * 0.5, Math.sin(lean) * 0.5];
+    const trouser: RGB = [rag[2] * 0.7, rag[1] * 0.7, rag[0] * 0.75];
+    const pall = 0.85 + hsh(8) * 0.35;
+    const skinTint: RGB = turned ? [1.0, 1.2, 1.8] : [1.05 * pall, 1.18 * pall, 1.0 * pall];
+    const gore: RGB = [0.5, 0.05, 0.04];
+
+    let a = this.zanim.get(z.id);
+    const hp = z.rec[this.sim.L.Z.hp] ?? 1;
+    if (!a) { a = { phase: hsh(9) * 6.28, yaw: z.yaw, speed: 0, attack: 0, flinch: 0, x: z.x, z: z.z, hp, kind, seen: t }; this.zanim.set(z.id, a); }
+    if (fall === 0) {
+      const moved = Math.hypot(z.x - a.x, z.z - a.z);
+      const speed = dt > 0 ? Math.min(moved / dt, 9) : 0;
+      a.speed += (speed - a.speed) * Math.min(1, dt * 8);
+      // About 1.25 m per full stride cycle, shorter for shamblers.
+      a.phase += (moved / ([0.95, 1.25, 1.45][kind] ?? 1.1)) * Math.PI * 2 * 0.5;
+      let dy = z.yaw - a.yaw;
+      dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+      a.yaw += dy * Math.min(1, dt * 7);
+      a.attack += ((state === 2 ? 1 : 0) - a.attack) * Math.min(1, dt * 10);
+      if (hp < a.hp - 0.001) a.flinch = 1;
+      a.flinch = Math.max(0, a.flinch - dt * 4.5);
+      a.x = z.x; a.z = z.z; a.hp = hp; a.kind = kind; a.seen = t;
+    }
+    const ph = a.phase;
+    const go = Math.min(1, a.speed / 1.2); // 0 standing, 1 moving
+    const rise = state === 0 ? -1.15 * tall + Math.min(1, Math.max(0, 1 - hp)) * tall : 0;
+    const amp = ([0.36, 0.55, 0.72][kind] ?? 0.4) * go;
+    const lean = ([0.34, 0.5, 0.68][kind] ?? 0.4) + slouch * 0.16 - a.flinch * 0.5 + a.attack * 0.2;
+    const sway = Math.sin(ph) * 0.05 * go + Math.sin(t * 0.9 + z.id) * 0.02;
+    const bob = Math.abs(Math.cos(ph)) * 0.045 * go * (1 + kind * 0.5);
+    const base = frame(z.x, z.y + rise, z.z, a.yaw + sway * 0.6);
+    // Falling: the whole body tips backwards about the feet and the limbs go slack.
+    const fa = fall * fall * (3 - 2 * fall) * 1.52;
+    const cf = Math.cos(fa), sf = Math.sin(fa);
+    const at = (lx: number, ly: number, lz: number): V3 => base.at(lx * broad, (ly * cf + lz * sf) * tall + fall * 0.06, (lz * cf - ly * sf) * tall);
+    const right = base.right;
+    const live = 1 - fall;
+
+    const hip = 0.93 + bob - a.attack * 0.03;
+    const chestL: [number, number, number] = [sway * 0.5, hip + Math.cos(lean) * 0.5, Math.sin(lean) * 0.5];
     const pelvis = at(0, hip, 0), chest = at(...chestL);
-    const headP = at(chestL[0] + Math.sin(t * 1.3 + z.id) * 0.03, chestL[1] + 0.24, chestL[2] + 0.12 + lean * 0.12);
-    // Legs: walkers drag one foot, runners stride.
+    const nod = Math.sin(t * 1.1 + z.id) * 0.03 * live;
+    const headL: [number, number, number] = [chestL[0] + (limp ? limp * 0.03 : 0) + nod, chestL[1] + 0.25, chestL[2] + 0.1 + lean * 0.14];
+    const headP = at(...headL);
+
+    // Legs: the limping leg takes a short, stiff step and drags.
     for (const side of [-1, 1]) {
       const sp = ph + (side > 0 ? Math.PI : 0);
-      const swing = Math.sin(sp) * amp * (kind === 0 && side > 0 ? 0.6 : 1);
-      const bend = Math.max(0, -Math.cos(sp)) * amp * 1.4 + 0.12;
-      const [knee, ankle] = chain(at, [side * 0.11, hip - 0.04, 0], 0.46, 0.44, swing, bend);
-      out.limb(at(side * 0.11, hip, 0), knee, 0.085, rag, MAT.fabric, 0, 0.09, right);
-      out.limb(knee, ankle, 0.062, rag, MAT.fabric, 0, 0.065, right);
-      const toe = at(side * 0.12 + 0, 0, 0);
-      out.limb(ankle, [ankle[0] + (toe[0] - z.x) * 0 + (ankle[0] - knee[0]) * 0 + Math.sin(-z.yaw) * 0.16, Math.max(ankle[1] - 0.05, z.y + rise + 0.04), ankle[2] - Math.cos(z.yaw) * 0.16], 0.05, [0.9, 0.9, 0.9], MAT.polymer, 0, 0.06);
+      const lame = limp === side ? 0.45 : 1;
+      const swing = Math.sin(sp) * amp * lame * live;
+      const bend = (Math.max(0, -Math.cos(sp)) * amp * 1.5 * lame + 0.1) * live + fall * 0.5 * (side > 0 ? 1 : 0.3);
+      const [knee, ankle] = chain(at, [side * 0.1, hip - 0.04, 0], 0.46, 0.44, swing, bend);
+      out.limb(at(side * 0.1, hip, 0), knee, 0.082, trouser, MAT.fabric, 0, 0.09, right);
+      out.limb(knee, ankle, 0.058, trouser, MAT.fabric, 0, 0.062, right);
+      // Foot: a shoe pointing the way it walks, kept above the ground.
+      const fwd = base.fwd;
+      const sole = Math.max(ankle[1] - 0.04, z.y + rise + 0.04);
+      out.limb([ankle[0] - fwd[0] * 0.03, sole, ankle[2] - fwd[2] * 0.03], [ankle[0] + fwd[0] * 0.17 * cf, sole + sf * 0.12, ankle[2] + fwd[2] * 0.17 * cf], 0.045, [0.5, 0.45, 0.4], MAT.polymer, 0, 0.055);
     }
-    // Torso, belly and torn shirt.
-    out.limb(pelvis, chest, 0.16, rag, MAT.fabric, 0, 0.12, right);
-    // Rib cage and shoulders, wider than the waist.
-    const ribs = at(chestL[0], chestL[1] - 0.1, chestL[2] - 0.02);
-    out.box(ribs[0], ribs[1], ribs[2], 0.46, 0.36, 0.28, rag, MAT.fabric, 0, 0, z.yaw + lurch, -lean * 0.8);
-    out.limb(at(0, hip + 0.02, 0.02), at(0, hip + 0.14, 0.05), 0.15, skinTint, MAT.skin, 0, 0.11, right);
-    out.limb(chest, headP, 0.055, skinTint, MAT.skin);
-    // Head: skull, jaw hanging open.
-    const jaw = 0.04 + Math.abs(Math.sin(t * 2.3 + z.id)) * 0.04;
-    out.box(headP[0], headP[1] + 0.05, headP[2], 0.21, 0.25, 0.23, skinTint, MAT.skin, 0, 0, z.yaw, -lean * 0.4, Math.sin(t + z.id) * 0.15);
-    const jp = at(chestL[0], chestL[1] + 0.2 - jaw, chestL[2] + 0.2 + lean * 0.12);
-    out.box(jp[0], jp[1], jp[2], 0.15, 0.06, 0.13, skinTint, MAT.skin, 0, 0, z.yaw, 0.3);
-    // Arms reach for whoever they are chasing; attacks swipe down.
-    const attack = state === 2 ? 1 : 0;
+    // Torso: pelvis, a hunched rib cage wider at the shoulders, and the belly between.
+    out.limb(pelvis, chest, 0.15, rag, MAT.fabric, 0, 0.115, right);
+    const ribs = at(chestL[0], chestL[1] - 0.09, chestL[2] - 0.01);
+    out.limb(at(chestL[0] - 0.13, chestL[1] - 0.08, chestL[2]), at(chestL[0] + 0.13, chestL[1] - 0.08, chestL[2]), 0.15, rag, MAT.fabric, 0, 0.12);
+    out.limb(at(0, hip - 0.02, 0), at(0, hip + 0.12, 0.03), 0.14, trouser, MAT.fabric, 0, 0.105, right);
+    // Torn shirt: bare, wounded skin showing through on one side.
+    const wound = at(chestL[0] + (hsh(10) - 0.5) * 0.2, chestL[1] - 0.16 - hsh(11) * 0.1, chestL[2] + 0.1);
+    out.limb(wound, [wound[0] + right[0] * 0.07, wound[1] - 0.06, wound[2] + right[2] * 0.07], 0.05, gore, MAT.skin, 0, 0.03);
+    void ribs;
+    // Neck and head: skull, brow, sunken cheeks, a slack jaw that works as it moans.
+    out.limb(chest, headP, 0.05, skinTint, MAT.skin);
+    const tilt = (limp * 0.25 + Math.sin(t * 0.8 + z.id) * 0.08) * live;
+    const skull = at(headL[0], headL[1] + 0.06, headL[2] + 0.01);
+    out.box(skull[0], skull[1], skull[2], 0.2 * broad ** 0.3, 0.235 * tall, 0.225, skinTint, MAT.skin, 0, 0, a.yaw, -lean * 0.45 + fa, tilt);
+    const jawDrop = (0.035 + Math.abs(Math.sin(t * 2.1 + z.id)) * 0.035 + a.attack * 0.04) * live + fall * 0.05;
+    const jp = at(headL[0], headL[1] - 0.045 - jawDrop, headL[2] + 0.075);
+    out.box(jp[0], jp[1], jp[2], 0.125, 0.05, 0.11, skinTint, MAT.skin, 0, 0, a.yaw, 0.35 + fa, tilt);
+    const mouth = at(headL[0], headL[1] - 0.02 - jawDrop * 0.5, headL[2] + 0.1);
+    out.box(mouth[0], mouth[1], mouth[2], 0.09, 0.02 + jawDrop, 0.03, [0.12, 0.02, 0.02], MAT.skin, 0, 0, a.yaw, fa, tilt);
+    if (hsh(12) < 0.6) {
+      // Matted hair.
+      const hair = at(headL[0], headL[1] + 0.15, headL[2] - 0.04);
+      out.box(hair[0], hair[1], hair[2], 0.19, 0.09, 0.2, [0.25, 0.22, 0.2], MAT.fabric, 0, 0, a.yaw, -lean * 0.45 + fa, tilt);
+    }
+    // Arms: shamblers grope ahead, runners pump, an attack lunges and claws. A missing arm is a stump.
     for (const side of [-1, 1]) {
-      const sp = ph * 0.5 + (side > 0 ? 1.4 : 0);
-      const sh = at(chestL[0] + side * 0.22, chestL[1] - 0.04, chestL[2]);
-      const reach = kind === 0 ? 0.6 + Math.sin(sp) * 0.1 : 0.3 + Math.sin(ph + (side > 0 ? Math.PI : 0)) * 0.5;
-      const raise = attack ? 0.9 + Math.sin(t * 14 + side) * 0.4 : reach;
-      const el = at(chestL[0] + side * 0.27, chestL[1] - 0.3 + raise * 0.24, chestL[2] + 0.12 + raise * 0.14);
-      const hand = at(chestL[0] + side * 0.2, chestL[1] - 0.32 + raise * 0.45, chestL[2] + 0.38 + raise * 0.12);
-      out.limb(sh, el, 0.055, rag, MAT.fabric, 0, 0.055);
-      out.limb(el, hand, 0.045, skinTint, MAT.skin, 0, 0.042);
-      out.box(hand[0], hand[1], hand[2], 0.08, 0.05, 0.11, skinTint, MAT.skin, 0, 0, z.yaw, -raise);
+      const sh = at(chestL[0] + side * 0.21, chestL[1] - 0.04, chestL[2]);
+      if (oneArm === side) {
+        const stump = at(chestL[0] + side * 0.27, chestL[1] - 0.2, chestL[2] + 0.02);
+        out.limb(sh, stump, 0.055, rag, MAT.fabric, 0, 0.055);
+        out.limb(stump, [stump[0], stump[1] - 0.04, stump[2]], 0.045, gore, MAT.skin, 0, 0.045);
+        continue;
+      }
+      const pump = Math.sin(ph + (side > 0 ? 0 : Math.PI)) * go;
+      const grope = kind === 0 ? 0.62 + Math.sin(ph * 0.5 + side) * 0.1 : 0.3 + pump * 0.45;
+      const claw = 0.95 + Math.sin(t * 13 + side * 1.7) * 0.35;
+      const raise = (grope * (1 - a.attack) + claw * a.attack) * live - fall * 0.3;
+      const el = at(chestL[0] + side * (0.27 + fall * 0.12), chestL[1] - 0.3 + raise * 0.24, chestL[2] + 0.1 + raise * 0.15);
+      const hand = at(chestL[0] + side * (0.2 + fall * 0.25), chestL[1] - 0.34 + raise * 0.47, chestL[2] + 0.36 * live + raise * 0.13 + a.attack * 0.12);
+      out.limb(sh, el, 0.052, hsh(13 + side) < 0.5 ? rag : skinTint, hsh(13 + side) < 0.5 ? MAT.fabric : MAT.skin, 0, 0.052);
+      out.limb(el, hand, 0.04, skinTint, MAT.skin, 0, 0.038);
+      // Hand: a palm and three hooked fingers.
+      const fwd = base.fwd;
+      const curl = 0.3 + a.attack * 0.5;
+      for (let f = -1; f <= 1; f++) {
+        const k: V3 = [hand[0] + right[0] * f * 0.022, hand[1], hand[2] + right[2] * f * 0.022];
+        out.limb(k, [k[0] + fwd[0] * 0.075, k[1] - 0.075 * curl + raise * 0.03, k[2] + fwd[2] * 0.075], 0.012, skinTint, MAT.skin, 0, 0.012);
+      }
     }
-    // Eyes glow through the fog.
+    // Eyes: a dull glow that dies with them.
     const eye: RGB = turned ? [0.4, 0.8, 1] : [1, 0.62, 0.12];
     for (const side of [-1, 1]) {
-      const e = at(chestL[0] + side * 0.05, chestL[1] + 0.32, chestL[2] + 0.24 + lean * 0.12);
-      glow.box(e[0], e[1], e[2], 0.035, 0.022, 0.02, eye, -1, 8, FLAG_NOSHADOW, z.yaw);
+      const e = at(headL[0] + side * 0.05, headL[1] + 0.075, headL[2] + 0.115);
+      glow.box(e[0], e[1], e[2], 0.032, 0.02, 0.02, eye, -1, 7 * live, FLAG_NOSHADOW, a.yaw);
     }
   }
 
@@ -616,8 +692,16 @@ export class Scene {
     for (const z of s.zombies()) {
       const state = z.rec[Z.state];
       if (state === 5) continue;
-      this.zombie(round, glows, z, state, z.rec[Z.kind], t);
+      this.zombie(round, glows, z, state, z.rec[Z.kind], t, dt);
     }
+    // The newly dead fall backwards, lie for a few seconds, then sink away.
+    for (const c of this.corpses) {
+      c.t += dt;
+      const sink = Math.max(0, c.t - 5) * 0.5;
+      this.zombie(round, glows, { id: c.id, x: c.x, y: c.y - sink, z: c.z, yaw: c.yaw, rec: c.rec }, 1, c.kind, t, 0, Math.min(1, c.t / 0.55));
+    }
+    this.corpses = this.corpses.filter(c => c.t < 6.5);
+    if (this.zanim.size > 200) for (const [id, a] of this.zanim) if (t - a.seen > 10) this.zanim.delete(id);
     for (const p of s.players()) if (p.rec[P.life] !== 2) this.survivor(round, glows, groups, p, t);
 
     // Power-ups, grenades and lingering effects.
