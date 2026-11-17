@@ -90,6 +90,9 @@ export class Scene {
   private animVel = { sprint: 0, reload: 0, lower: 0, melee: 0, crouch: 0, fall: 0, strafe: 0 };
   private barrAxis: boolean[];
   private staticLights: LightSrc[] = [];
+  private switchAt: { x: number; z: number; nx: number; nz: number } | null = null;
+  private lever = 0;
+  private leverVel = 0;
   private scenery: Scenery;
   /** Per-frame batches, reused so a 360 fps loop does not churn the garbage collector. */
   private casters = new Batch();
@@ -109,6 +112,7 @@ export class Scene {
       const flags = b[o + 7] & 0xff;
       if (flags & (2 | 4)) continue; // hidden, or a door (doors are drawn while closed)
       if (b[o + 6] >= SCENERY_MATS.tree && b[o + 6] <= SCENERY_MATS.boulder) continue; // drawn by the scenery
+      if (b[o + 6] === 8) { this.switchgear(b, o); continue; }
       this.addBox(this.world, b, o);
       if (b[o + 6] === 1) this.trimWall(b, o);
       if (b[o + 6] === 2) this.crateDetail(b, o);
@@ -201,6 +205,36 @@ export class Scene {
     }
   }
 
+  /**
+   * The main breaker: a steel switchgear cabinet with gauges, warning stripes and conduit. Its big
+   * knife-switch lever is drawn each frame (see `build`) so it can swing when the power comes on.
+   */
+  private switchgear(b: Float32Array, o: number): void {
+    const x = (b[o] + b[o + 3]) / 2, z = (b[o + 2] + b[o + 5]) / 2;
+    // Face whichever side has open floor.
+    const n = ([[1, 0], [-1, 0], [0, 1], [0, -1]] as const).find(([dx, dz]) => !this.solidAt(x + dx * 1.2, z + dz * 1.2)) ?? [1, 0];
+    this.switchAt = { x, z, nx: n[0], nz: n[1] };
+    const yaw = n[0] !== 0 ? Math.PI / 2 : 0;
+    const face = (d: number, y: number, out: number, w: number, h: number, th: number, c: RGB, layer: number, batch = this.world, glow = 0) => {
+      batch.box(x + n[0] * out + n[1] * d, y, z + n[1] * out + n[0] * d, w, h, th, c, layer, glow, glow ? FLAG_NOSHADOW : 0, yaw);
+    };
+    this.world.box(x, 0.06, z, 0.8, 0.12, 0.8, [0.7, 0.7, 0.7], MAT.concrete); // plinth
+    this.world.box(x, 1.0, z, 0.64, 1.76, 0.64, [0.62, 0.66, 0.64], MAT.painted); // cabinet
+    this.world.box(x, 1.91, z, 0.7, 0.06, 0.7, [0.5, 0.5, 0.5], MAT.gunmetal); // cap
+    face(0, 1.05, 0.325, 0.5, 1.2, 0.02, [0.5, 0.54, 0.52], MAT.painted); // door panel
+    face(0, 0.3, 0.33, 0.56, 0.12, 0.02, [0.9, 0.7, 0.1], MAT.painted); // hazard band
+    for (let k = -2; k <= 2; k++) face(k * 0.11, 0.3, 0.342, 0.05, 0.12, 0.01, [0.05, 0.05, 0.05], MAT.painted);
+    // Two dial gauges.
+    for (const d of [-0.13, 0.13]) {
+      this.worldRound.box(x + n[0] * 0.335 + n[1] * d, 1.66, z + n[1] * 0.335 + n[0] * d, 0.15, 0.03, 0.15, [0.85, 0.85, 0.8], MAT.painted, 0, 0, yaw, Math.PI / 2);
+      face(d, 1.66, 0.352, 0.1, 0.012, 0.004, [0.05, 0.05, 0.05], -1);
+    }
+    // Hinge block for the lever, and conduit up the back and overhead.
+    face(0, 1.2, 0.36, 0.34, 0.12, 0.08, [0.3, 0.3, 0.32], MAT.gunmetal);
+    this.worldRound.box(x - n[0] * 0.2, 3.0, z - n[1] * 0.2, 0.09, 2.2, 0.09, [0.8, 0.8, 0.8], MAT.gunmetal);
+    this.worldRound.box(x + n[0] * 0.1, 2.6, z + n[1] * 0.1, 0.06, 1.4, 0.06, [0.7, 0.7, 0.7], MAT.gunmetal);
+  }
+
   /** Crate stacks get dark steel corner straps. */
   private crateDetail(b: Float32Array, o: number): void {
     const [x0, y0, z0, x1, y1, z1] = b.subarray(o, o + 6);
@@ -264,6 +298,11 @@ export class Scene {
     } else if (e[0] === V.explode) {
       const stun = e[5] === 1;
       this.flashes.push({ pos: [e[1], e[2] + 0.5, e[3]], t: 0.35, life: 0.35, color: stun ? [0.5, 0.7, 1] : [1, 0.2, 0.2], radius: e[4] * 2.5, size: e[4] * 0.5 });
+    } else if (e[0] === V.power && this.switchAt) {
+      // Contacts arcing as the breaker closes.
+      const sw = this.switchAt;
+      for (let k = 0; k < 8; k++) this.flashes.push({ pos: [sw.x + sw.nx * 0.42, 1.2, sw.z + sw.nz * 0.42], t: 0.3 + Math.random() * 0.3, life: 0.6, color: [0.7, 0.85, 1], radius: 0, size: 0.04, glow: 8, vel: [sw.nx * 2 + (Math.random() - 0.5) * 3, 1 + Math.random() * 3, sw.nz * 2 + (Math.random() - 0.5) * 3] });
+      this.flashes.push({ pos: [sw.x + sw.nx * 0.5, 1.3, sw.z + sw.nz * 0.5], t: 0.15, life: 0.15, color: [0.7, 0.85, 1], radius: 9, size: 0.2, glow: 8 });
     } else if (e[0] === V.zdeath) {
       this.flashes.push({ pos: [e[2], e[3] + 1, e[4]], t: 0.18, life: 0.18, color: [0.5, 0.04, 0.03], radius: 0, size: 0.6 });
     } else if (e[0] === V.powerup && e[5] === 1) {
@@ -530,9 +569,21 @@ export class Scene {
       } else if (kind === I.tonic) {
         glows.box(x, 2.35, z, 0.7, 0.1, 0.7, [0.2, 1, 0.9], -1, 2.5, FLAG_NOSHADOW);
         lights.push({ pos: [x, 2.6, z], radius: 4, color: [0.2, 1, 0.9], intensity: 3 });
-      } else if (kind === I.power) {
-        glows.box(x, 1.45, z, 0.2, 0.12, 0.2, power ? [0.2, 1, 0.3] : [1, 0.2, 0.1], -1, 4, FLAG_NOSHADOW);
-        lights.push({ pos: [x, 1.9, z], radius: 5, color: power ? [0.2, 1, 0.3] : [1, 0.2, 0.1], intensity: 3 });
+      } else if (kind === I.power && this.switchAt) {
+        // The lever swings from up (off) to down (on) with a little overshoot.
+        const sw = this.switchAt;
+        this.leverVel += ((power ? 1 : 0) - this.lever) * 90 * dt - this.leverVel * 9 * dt;
+        this.lever = Math.max(-0.05, Math.min(1.12, this.lever + this.leverVel * dt));
+        const ang = 1.05 - this.lever * 2.1; // radians above the horizontal
+        const reach = 0.52;
+        const tip = (side: number): V3 => [sw.x + sw.nx * (0.4 + Math.cos(ang) * reach) + sw.nz * side, 1.2 + Math.sin(ang) * reach, sw.z + sw.nz * (0.4 + Math.cos(ang) * reach) + sw.nx * side];
+        const hinge = (side: number): V3 => [sw.x + sw.nx * 0.4 + sw.nz * side, 1.2, sw.z + sw.nz * 0.4 + sw.nx * side];
+        for (const side of [-0.13, 0.13]) round.limb(hinge(side), tip(side), 0.022, [0.75, 0.6, 0.4], MAT.gunmetal);
+        round.limb(tip(-0.17), tip(0.17), 0.035, [0.75, 0.1, 0.08], MAT.painted); // red grip
+        // Indicator lamps: red while dead, green once live.
+        const lamp: RGB = power ? [0.2, 1, 0.3] : [1, 0.15, 0.08];
+        glows.box(sw.x + sw.nx * 0.34 + sw.nz * (power ? 0.12 : -0.12), 1.44, sw.z + sw.nz * 0.34 + sw.nx * (power ? 0.12 : -0.12), 0.07, 0.07, 0.07, lamp, -1, 5, FLAG_NOSHADOW);
+        lights.push({ pos: [sw.x + sw.nx * 0.7, 1.6, sw.z + sw.nz * 0.7], radius: 5, color: lamp, intensity: 3 });
       } else if (kind === I.part && hdr && !(hdr[H.parts] & (1 << param))) {
         const fuse = param < 8;
         glows.box(x, y + Math.sin(t * 2 + k) * 0.08, z, fuse ? 0.14 : 0.4, fuse ? 0.34 : 0.4, fuse ? 0.14 : 0.08, fuse ? [1, 0.8, 0.2] : [0.5, 0.7, 0.9], -1, 1.6, FLAG_NOSHADOW, t * 1.5);

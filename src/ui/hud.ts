@@ -126,7 +126,7 @@ export class Hud {
       case 'crate': return snap.hdr[H.crate_state] === 2 ? `Press F to take ${cat.weapons[snap.hdr[H.crate_weapon]]?.name}` : `Press F for a random weapon${price}`;
       case 'bench': return `Press F to ${tier ? 're-roll the effect on' : 'upgrade'} ${cat.weapons[gun]?.name}${price}`;
       case 'tonic': return `Press F for a tonic${price}`;
-      case 'power': return 'Press F to turn on the power';
+      case 'power': return 'Press F to throw the main breaker';
       case 'workbench': return cost > 0 ? `Press F for a Bulwark${price}` : 'Press F to assemble';
       case 'part': return 'Press F to pick up';
       case 'console': return 'Press F to use the console';
