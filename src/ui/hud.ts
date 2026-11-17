@@ -2,6 +2,7 @@
 import { fireMode, WEAPON_CLASSES, type Sim, type Snap } from '../core/sim';
 import { cardHtml, COLORS, DEFAULT_LOOK, reticleSvg, type Look } from '../game/look';
 import type { Session } from '../game/session';
+import { Minimap } from './minimap';
 import { LADDER_RUNGS, MODES, TEAM_CSS, TEAM_NAMES } from '../game/rules';
 
 /** Where a world point is on screen (0..1), or null when it is behind the camera. */
@@ -24,7 +25,10 @@ export class Hud {
   /** Last frame's values, to spot changes worth animating. */
   private state = { gun: '', ammo: 0, hp: 1, thrust: 1, points: -1, round: '', shown: -1, banner: '', scoreA: 0, scoreB: 0, dirTimer: 0, clockMax: 0 };
 
+  readonly minimap: Minimap;
+
   constructor(private sim: Sim) {
+    this.minimap = new Minimap(sim, $('minimap') as HTMLCanvasElement, $('bigmap-canvas') as HTMLCanvasElement, $('minimap-label'));
     // Compass tape: three turns of headings every 15 degrees, so it can scroll without a seam.
     const names: Record<number, string> = { 0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: 'W', 315: 'NW' };
     const cell = (d: number) => `<span class="${d % 90 === 0 ? 'major' : ''}">${names[d] ?? (d % 45 === 0 ? '' : d)}</span>`;
@@ -75,6 +79,7 @@ export class Hud {
     const { V } = this.sim.L;
     const cat = this.sim.catalog;
     const me = s.selfId;
+    this.minimap.event(e, s);
     switch (e[0]) {
       case V.hit: if (e[1] === me) { this.hitUntil = performance.now() + 120; this.hitKill = e[4] > 0; } break;
       case V.round: this.announce(e[2] ? `Round ${e[1]} survived` : s.start.mode === 0 ? `Round ${e[1]}` : 'Fight!'); break;
@@ -259,6 +264,7 @@ export class Hud {
     if (!clock.hidden) { st.clockMax = Math.max(st.clockMax, hdr[H.timer]); ($('clock-fill') as HTMLElement).style.width = `${(hdr[H.timer] / Math.max(st.clockMax, 1)) * 100}%`; }
     horde.hidden = !(survival && hdr[H.phase] === 1);
     if (!horde.hidden) ($('horde-fill') as HTMLElement).style.width = `${Math.min(1, hdr[H.left] / Math.max(1, this.sim.zombieCount(hdr[H.round], snap.players.length))) * 100}%`;
+    this.minimap.update(s, snap, p);
     this.objectiveBar(s, snap, p);
     this.markers(s, snap, project);
     $('left').textContent = survival ? (hdr[H.phase] === 1 ? `${hdr[H.left]} left` : hdr[H.phase] === 3 ? '' : `Next round in ${Math.ceil(hdr[H.timer])}`) : hdr[H.phase] === 0 ? `Starting in ${Math.ceil(hdr[H.timer])}` : '';

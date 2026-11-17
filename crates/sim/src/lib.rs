@@ -331,6 +331,8 @@ pub extern "C" fn gs_stat(kind: u32, id: u32, field: u32) -> f32 {
             11 => w.burst as f32,
             _ => w.r1,
         }),
+        // Zone rectangles in map cells: id = map * 64 + zone; fields col0, row0, col1, row1.
+        K_ZONE => maps::MAPS.get(i / 64).and_then(|m| m.zones.get(i % 64)).map_or(0.0, |z| [z.1, z.2, z.3, z.4].get(field as usize).copied().unwrap_or(0) as f32),
         K_ATTACHMENT => ATTACHMENTS.get(i).map_or(0.0, |a| a.2 as f32),
         K_PERK => PERKS.get(i).map_or(0.0, |p| p.2 as f32),
         K_STREAK => STREAKS.get(i).map_or(0.0, |s| s.2 as f32),

@@ -26,6 +26,8 @@ const transport = createTransport(params.get('net'));
 
 interface Settings {
   sens: number; fov: number; volume: number; blur: boolean; dof: boolean;
+  /** Minimap diameter in pixels (0 hides it), whether it turns with the view, and its range in metres. */
+  mapSize: number; mapRotate: number; mapRange: number;
   /** Material resolution preset. */
   textures: TextureQuality;
   /** Frame rate cap; 0 draws every display refresh (up to 360 Hz and beyond). */
@@ -37,7 +39,7 @@ interface Settings {
   touch: 'auto' | 'on' | 'off';
   touchSens: number;
 }
-const DEFAULTS: Settings = { sens: 1, fov: 90, volume: 0.5, blur: true, dof: true, textures: 'high', fpsLimit: 0, showFps: false, renderScale: 1, touch: 'auto', touchSens: 1 };
+const DEFAULTS: Settings = { sens: 1, fov: 90, volume: 0.5, blur: true, dof: true, textures: 'high', fpsLimit: 0, showFps: false, renderScale: 1, touch: 'auto', touchSens: 1, mapSize: 190, mapRotate: 1, mapRange: 24 };
 /** Phones start lighter: they have less GPU and memory than a desktop, and post effects cost the most. */
 const PHONE_DEFAULTS: Partial<Settings> = { textures: 'medium', blur: false, dof: false, renderScale: 0.75, fov: 80 };
 function loadSettings(): Settings {
@@ -372,6 +374,16 @@ class App {
     $('fps').hidden = !s.showFps;
     bind('set-scale', 'renderScale', () => { this.resize(); $('scale-value').textContent = `${Math.round(s.renderScale * 100)}%`; });
     $('scale-value').textContent = `${Math.round(s.renderScale * 100)}%`;
+    const applyMap = () => {
+      this.hud.minimap.settings = { size: s.mapSize, rotate: !!s.mapRotate, range: s.mapRange };
+      document.documentElement.style.setProperty('--mm', `${s.mapSize}px`);
+    };
+    for (const [id, key] of [['set-mapsize', 'mapSize'], ['set-maprotate', 'mapRotate'], ['set-maprange', 'mapRange']] as const) {
+      const el = $<HTMLSelectElement>(id);
+      el.value = String(s[key]);
+      el.onchange = () => { s[key] = +el.value; applyMap(); saveSettings(s); };
+    }
+    applyMap();
     bind('set-touchsens', 'touchSens', () => { if (this.input.touch) this.input.touch.sensitivity = s.touchSens; });
     const touchSel = $<HTMLSelectElement>('set-touch');
     touchSel.value = s.touch;
@@ -817,6 +829,16 @@ class App {
     // The HUD is DOM text: refreshing it faster than 60 Hz costs time and shows nothing new.
     if (now - this.lastHud >= 16) {
       this.lastHud = now;
+      // The full map shows while its key is held; the zoom key steps through the minimap ranges.
+      this.hud.minimap.expanded = this.input.fullMap;
+      if (this.input.mapZoom) {
+        this.input.mapZoom = false;
+        const ranges = [16, 24, 36, 55];
+        this.settings.mapRange = ranges[(ranges.indexOf(this.settings.mapRange) + 1) % ranges.length];
+        this.hud.minimap.settings.range = this.settings.mapRange;
+        $<HTMLSelectElement>('set-maprange').value = String(this.settings.mapRange);
+        saveSettings(this.settings);
+      }
       this.hud.update(s, this.input.scoreboard, p => this.scene?.project(p) ?? null);
       if (this.screen === 'pause') this.renderPauseTeams();
       if (this.settings.showFps) $('fps').textContent = `${Math.round(this.meter.fps)} fps · ${this.meter.frameMs.toFixed(1)} ms${this.meter.displayHz ? ` · ${this.meter.displayHz} Hz display` : ''}`;

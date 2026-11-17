@@ -61,7 +61,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 #quest { margin-top: 10px; font-size: 13px; display: grid; gap: 4px; }
 #quest b { color: var(--accent); margin-right: 6px; }
 #quest .done { color: #7bd88f; }
-#feed { position: absolute; right: 20px; top: 16px; text-align: right; display: grid; gap: 3px; font-size: 14px; }
+#feed { position: absolute; right: 20px; top: calc(var(--mm, 190px) + 48px); text-align: right; display: grid; gap: 3px; font-size: 14px; }
 #banner { position: absolute; left: 0; right: 0; top: 18%; text-align: center; font-size: 30px; font-weight: 700; letter-spacing: 1px; }
 #fps { position: absolute; left: 50%; top: 6px; transform: translateX(-50%); font: 12px/1.2 ui-monospace, Menlo, Consolas, monospace; color: #9fe39f; background: rgba(0, 0, 0, 0.45); padding: 2px 8px; border-radius: 4px; text-shadow: none; }
 #ping { position: absolute; left: 0; right: 0; top: 12%; text-align: center; color: #7fd4ff; }
@@ -357,3 +357,23 @@ body.touch-play #compass { display: none; }
 #objective .side u { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--team); transition: width 0.4s ease-out; text-decoration: none; }
 #objective .side.scored { animation: bump 0.3s; }
 body.touch-play #mag, body.touch-play #firemode { display: none; }
+
+/* Minimap and full map */
+#minimap { position: absolute; right: 18px; top: 14px; border-radius: 50%; box-shadow: 0 0 0 1px #000a, 0 4px 14px #000a; }
+#minimap[hidden] { display: none; }
+#minimap-label { position: absolute; right: 18px; top: calc(var(--mm, 190px) + 20px); width: var(--mm, 190px); text-align: center; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: #ffffffcc; }
+#bigmap { position: absolute; left: 50%; top: 50%; translate: -50% -50%; padding: 10px; background: #0b0e12ee; border: 1px solid #ffffff33; border-radius: 8px; box-shadow: 0 10px 40px #000c; }
+#bigmap[hidden] { display: none; }
+#bigmap canvas { display: block; border-radius: 4px; }
+#bigmap-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; justify-content: center; margin-top: 8px; font-size: 12px; color: #ffffffcc; text-shadow: none; }
+#bigmap-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.lg { width: 11px; height: 11px; display: inline-block; border-radius: 50%; border: 1px solid #000; }
+.lg.you { background: #fff; clip-path: polygon(50% 0, 100% 100%, 50% 72%, 0 100%); border-radius: 0; }
+.lg.mate { background: #7fd4ff; clip-path: polygon(50% 0, 100% 100%, 50% 72%, 0 100%); border-radius: 0; }
+.lg.foe { background: #ff3b30; border-color: #fff; }
+.lg.dead { background: #d23c2a; }
+.lg.roof { background: #7fa4d840; border: 1px dashed #9fc0ee; border-radius: 2px; }
+.lg.door { background: #ff9a3c; border-radius: 2px; }
+body.touch-play #minimap { right: auto; left: 50%; top: 96px; translate: -50% 0; scale: 0.6; transform-origin: top center; }
+body.touch-play #minimap-label { display: none; }
+body.touch-play #feed { top: 16px; right: 120px; }

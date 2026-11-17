@@ -30,6 +30,8 @@ export const ACTIONS: Action[] = [
   { id: 'streak3', label: 'Streak 3', def: 'Digit6', btn: Btn.streak3 },
   { id: 'third', label: 'Third-person view (hold)', def: 'KeyT' },
   { id: 'scores', label: 'Scoreboard (hold)', def: 'Tab' },
+  { id: 'map', label: 'Full map (hold)', def: 'KeyM' },
+  { id: 'mapzoom', label: 'Minimap zoom', def: 'KeyN' },
 ];
 
 export type Binds = Record<string, string>;

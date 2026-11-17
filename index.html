@@ -25,6 +25,9 @@
     <div id="hit-dir"></div>
     <div id="reload-ring" hidden><svg viewBox="0 0 60 60"><circle cx="30" cy="30" r="26" class="track"/><circle cx="30" cy="30" r="26" class="arc" id="reload-arc"/></svg><span>RELOADING</span></div>
     <div id="top-left"><div id="round"></div><div id="clock-bar"><i id="clock-fill"></i></div><div id="left"></div><div id="horde-bar" hidden><i id="horde-fill"></i></div><div id="quest"></div></div>
+    <canvas id="minimap" width="190" height="190"></canvas>
+    <div id="minimap-label"></div>
+    <div id="bigmap" hidden><canvas id="bigmap-canvas"></canvas><div id="bigmap-legend"><span><i class="lg you"></i>You</span><span><i class="lg mate"></i>Teammate</span><span><i class="lg foe"></i>Enemy seen</span><span><i class="lg dead"></i>The dead</span><span><i class="lg roof"></i>Indoors</span><span><i class="lg door"></i>Locked door</span></div></div>
     <div id="feed"></div>
     <div id="banner"></div>
     <div id="ping"></div>
@@ -184,6 +187,10 @@
       <label>Mouse sensitivity <input id="set-sens" type="range" min="0.2" max="3" step="0.05"></label>
       <label>On-screen touch controls <select id="set-touch"><option value="auto">Automatic (on for phones and tablets)</option><option value="on">On</option><option value="off">Off</option></select></label>
       <label>Touch look sensitivity <input id="set-touchsens" type="range" min="0.3" max="3" step="0.05"></label>
+      <h3>Minimap</h3>
+      <label>Minimap <select id="set-mapsize"><option value="0">Off</option><option value="150">Small</option><option value="190">Medium</option><option value="250">Large</option></select></label>
+      <label>Minimap turns <select id="set-maprotate"><option value="1">With your view</option><option value="0">Never (north is up)</option></select></label>
+      <label>Minimap range <select id="set-maprange"><option value="16">Close (16 m)</option><option value="24">Normal (24 m)</option><option value="36">Wide (36 m)</option><option value="55">Very wide (55 m)</option></select></label>
       <h3>Key bindings</h3>
       <p class="hint">Click a binding, then press the key or mouse button you want. Esc cancels. The mouse wheel always switches weapon.</p>
       <div id="binds"></div>

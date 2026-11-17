@@ -26,6 +26,9 @@ export class Input {
   capturing = false;
   /** Held while the third-person key is down. */
   thirdPerson = false;
+  /** Held while the full-map key is down; `mapZoom` is set by a press of the zoom key. */
+  fullMap = false;
+  mapZoom = false;
   private act = new Map<string, { id: string; btn?: number }>();
 
   /** Rebuilds the key lookup after bindings change. */
@@ -42,6 +45,8 @@ export class Input {
     if (a.id === 'weapon2' && down) this.slot = 1;
     if (a.id === 'scores') this.scoreboard = down;
     if (a.id === 'third') this.thirdPerson = down;
+    if (a.id === 'map') this.fullMap = down;
+    if (a.id === 'mapzoom' && down) this.mapZoom = true;
   }
 
   constructor(private canvas: HTMLCanvasElement) {
@@ -99,7 +104,7 @@ export class Input {
     }
     if (document.pointerLockElement === this.canvas) document.exitPointerLock();
   }
-  private reset(): void { this.keyButtons = this.latched = 0; this.keys.clear(); this.dx = this.dy = 0; this.scoreboard = false; this.thirdPerson = false; }
+  private reset(): void { this.keyButtons = this.latched = 0; this.keys.clear(); this.dx = this.dy = 0; this.scoreboard = false; this.thirdPerson = false; this.fullMap = false; }
 
   /** Strafe and forward axes, each -1..1. */
   move(): [number, number] {

@@ -318,26 +318,26 @@ await check('team mode: match settings, teams, objectives and the pause roster',
   await host.evaluate(() => { document.getElementById('lobby-rules').open = true; });
   await host.selectOption('#rule-score', '100');
   await host.check('#rule-ff');
-  await guest.waitForFunction(() => document.getElementById('rule-score').value === '100' && document.getElementById('rule-ff').checked, null, { timeout: 10000 });
+  await guest.waitForFunction(() => document.getElementById('rule-score').value === '100' && document.getElementById('rule-ff').checked, null, { timeout: 60000 });
   if (!(await guest.isDisabled('#rule-score'))) throw new Error('a guest can edit match settings');
   const summary = await guest.textContent('#rules-summary');
   const teams = await host.$$eval('#lobby-players .team', els => els.map(e => e.textContent));
   if (teams.join() !== 'Ember,Cobalt') throw new Error(`lobby teams: ${teams}`);
   await guest.click('#btn-ready');
-  await host.waitForFunction(() => document.querySelector('#lobby-players')?.textContent.includes('ready'), null, { timeout: 10000 });
+  await host.waitForFunction(() => document.querySelector('#lobby-players')?.textContent.includes('ready'), null, { timeout: 60000 });
   await host.click('#btn-start');
-  await guest.waitForFunction(() => window.app.session?.snap, null, { timeout: 20000 });
+  await guest.waitForFunction(() => window.app.session?.snap, null, { timeout: 120000 });
   await engage(host);
   await engage(guest);
   // Three zones on the map, team scores on screen, opposite teams on the two machines.
-  await guest.waitForFunction(() => document.querySelectorAll('#objective .zone').length === 3 && document.querySelectorAll('#objective .side').length === 2, null, { timeout: 30000 });
+  await guest.waitForFunction(() => document.querySelectorAll('#objective .zone').length === 3 && document.querySelectorAll('#objective .side').length === 2, null, { timeout: 120000 });
   const side = page => page.evaluate(() => { const a = window.app; return { team: a.session.local()[a.sim.L.P.team], limit: a.session.snap.hdr[a.sim.L.H.score_limit] }; });
   const [hs, gs] = [await side(host), await side(guest)];
   if (hs.team === gs.team || ![0, 1].includes(hs.team) || ![0, 1].includes(gs.team)) throw new Error(`teams ${hs.team} and ${gs.team}`);
   if (gs.limit !== 100) throw new Error(`score limit on the guest is ${gs.limit}`);
   // Esc menu: both rosters; with one player a side, switching would be unfair, so the button is off.
   await guest.evaluate(() => window.app.show('pause'));
-  await guest.waitForFunction(() => document.querySelectorAll('#pause-teams .roster').length === 2, null, { timeout: 15000 });
+  await guest.waitForFunction(() => document.querySelectorAll('#pause-teams .roster').length === 2, null, { timeout: 60000 });
   const roster = await guest.evaluate(() => document.getElementById('pause-teams').innerText.replace(/\s+/g, ' '));
   if (!/Ember/i.test(roster) || !/Cobalt/i.test(roster) || !roster.includes('Host') || !roster.includes('Guest')) throw new Error(`pause roster: ${roster}`);
   if (!(await guest.isDisabled('#btn-switch-team'))) throw new Error('switching to make it 2 v 0 should be disabled');

@@ -51,7 +51,7 @@ export interface Catalog {
   powerups: string[];
   /** Weapon ladder, first rung to last (weapon ids). */
   ladder: number[];
-  maps: { id: number; name: string; zones: string[]; doors: string[]; props: string[]; quests: { name: string; steps: string[] }[] }[];
+  maps: { id: number; name: string; zones: string[]; zoneRects: { name: string; c0: number; r0: number; c1: number; r1: number }[]; doors: string[]; props: string[]; quests: { name: string; steps: string[] }[] }[];
 }
 
 export class Sim {
@@ -131,6 +131,7 @@ export class Sim {
         id,
         name: this.str(Kind.map, id),
         zones: names(Kind.zone, id),
+        zoneRects: names(Kind.zone, id).map((name, z) => { const f = (k: number) => this.stat(Kind.zone, id * 64 + z, k); return { name, c0: f(0), r0: f(1), c1: f(2), r1: f(3) }; }),
         doors: names(Kind.door, id),
         props: names(Kind.prop, id),
         quests: Array.from({ length: this.count(Kind.quest, id) }, (_, q) => {
