@@ -117,6 +117,7 @@ export class Scene {
       if (flags & (2 | 4)) continue; // hidden, or a door (doors are drawn while closed)
       if (b[o + 6] >= SCENERY_MATS.tree && b[o + 6] <= SCENERY_MATS.boulder) continue; // drawn by the scenery
       if (b[o + 6] === 8) { this.switchgear(b, o); continue; }
+      if ([5, 6, 7, 9, 10, 11, 12].includes(b[o + 6])) this.machineDetail(b, o);
       this.addBox(this.world, b, o);
       if (b[o + 6] === 1) this.trimWall(b, o);
       if (b[o + 6] === 2) this.crateDetail(b, o);
@@ -244,6 +245,85 @@ export class Scene {
     face(0, 1.2, 0.36, 0.34, 0.12, 0.08, [0.3, 0.3, 0.32], MAT.gunmetal);
     this.worldRound.box(x - n[0] * 0.2, 3.0, z - n[1] * 0.2, 0.09, 2.2, 0.09, [0.8, 0.8, 0.8], MAT.gunmetal);
     this.worldRound.box(x + n[0] * 0.1, 2.6, z + n[1] * 0.1, 0.06, 1.4, 0.06, [0.7, 0.7, 0.7], MAT.gunmetal);
+  }
+
+  /** Which way a free-standing object should face: toward open floor. */
+  private facing(x: number, z: number, reach = 1.3): [number, number] {
+    return (([[0, 1], [0, -1], [1, 0], [-1, 0]] as [number, number][]).find(([dx, dz]) => !this.solidAt(x + dx * reach, z + dz * reach)) ?? [0, 1]);
+  }
+
+  /**
+   * Detail on the machines and stands: perk machines get a sign box, display window, coin slot
+   * and vents; the crate straps, latches and hinges; the upgrade bench a press head, gauge and
+   * pipes; the tonic dispenser shelves of bottles; consoles a screen and keys; wall-buy stands a
+   * price plate and a back board.
+   */
+  private machineDetail(b: Float32Array, o: number): void {
+    const mat = b[o + 6];
+    const [x0, , z0, x1, y1, z1] = b.subarray(o, o + 6);
+    const x = (x0 + x1) / 2, z = (z0 + z1) / 2, w = x1 - x0, d = z1 - z0;
+    const n = this.facing(x, z);
+    const yaw = n[0] !== 0 ? Math.PI / 2 : 0;
+    const half = (n[0] !== 0 ? w : d) / 2, span = n[0] !== 0 ? d : w;
+    const face = (side: number, y: number, out: number, wd: number, ht: number, th: number, c: ArrayLike<number>, layer: number, glow = 0, rough = 1, metal = 0) => {
+      (glow > 0 ? this.worldGlow : this.world).box(x + n[0] * (half + out) + n[1] * side, y, z + n[1] * (half + out) + n[0] * side, wd, ht, th, c, layer, glow, glow > 0 ? FLAG_NOSHADOW : 0, yaw, 0, 0, metal, rough);
+    };
+    const STEEL: RGB = [0.7, 0.7, 0.72], DARK: RGB = [0.12, 0.12, 0.13];
+    if (mat === 5) {
+      // Perk machine.
+      this.world.box(x, 0.05, z, w + 0.1, 0.1, d + 0.1, DARK, MAT.gunmetal); // kick plate
+      this.world.box(x, y1 + 0.06, z, w + 0.08, 0.12, d + 0.08, STEEL, MAT.gunmetal); // top trim
+      face(0, 1.0, 0.012, span * 0.72, 0.8, 0.02, [0.04, 0.05, 0.06], -1, 0, 0.08); // display glass
+      for (let k = 0; k < 3; k++) face(-span * 0.22 + k * span * 0.22, 0.86, 0.03, 0.09, 0.24, 0.05, [0.8, 0.85, 0.9], -1, 0, 0.15); // bottles behind glass
+      face(0, 0.42, 0.02, span * 0.5, 0.16, 0.04, DARK, MAT.polymer); // dispensing slot
+      face(span * 0.3, 1.25, 0.02, 0.05, 0.12, 0.03, STEEL, MAT.gunmetal); // coin slot
+      face(span * 0.3, 1.08, 0.02, 0.06, 0.06, 0.03, [0.8, 0.1, 0.1], MAT.painted); // button
+      for (let k = 0; k < 5; k++) face(0, 0.14 + k * 0.045, 0.012, span * 0.7, 0.014, 0.02, DARK, MAT.gunmetal); // vents
+      for (const sd of [-1, 1]) face(sd * (span / 2 + 0.02), y1 / 2, -0.04, 0.04, y1, 0.06, STEEL, MAT.gunmetal); // corner rails
+    } else if (mat === 6) {
+      // Mystery crate: straps, latches, corner irons and rope handles.
+      for (const sx of [-0.45, 0.45]) this.world.box(x + (n[0] !== 0 ? 0 : sx), y1 / 2, z + (n[0] !== 0 ? sx : 0), n[0] !== 0 ? w + 0.03 : 0.07, y1 + 0.03, n[0] !== 0 ? 0.07 : d + 0.03, DARK, MAT.gunmetal);
+      for (const sd of [-0.45, 0.45]) { face(sd, y1 - 0.14, 0.012, 0.09, 0.12, 0.03, [0.75, 0.6, 0.3], MAT.gunmetal, 0, 0.4, 1); }
+      face(0, y1 - 0.14, 0.02, 0.14, 0.16, 0.04, [0.75, 0.6, 0.3], MAT.gunmetal, 0, 0.4, 1); // lock plate
+      this.world.box(x, y1 + 0.015, z, w + 0.04, 0.03, d + 0.04, [0.5, 0.45, 0.42], MAT.wood); // lid lip
+      for (const cx of [x0, x1]) for (const cz of [z0, z1]) this.world.box(cx, y1 / 2, cz, 0.06, y1, 0.06, DARK, MAT.gunmetal);
+    } else if (mat === 7) {
+      // Upgrade bench: a press head on columns, a gauge, feed pipes and a work plate.
+      this.world.box(x, 1.02, z, w * 0.9, 0.06, d * 0.9, STEEL, MAT.gunmetal); // work plate
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) this.worldRound.box(x + sx * w * 0.4, 1.6, z + sz * d * 0.4, 0.07, 1.2, 0.07, STEEL, MAT.gunmetal);
+      this.world.box(x, 2.0, z, w * 0.8, 0.3, d * 0.8, [0.5, 0.42, 0.6], MAT.painted); // press head
+      this.worldRound.box(x, 1.72, z, 0.22, 0.3, 0.22, STEEL, MAT.gunmetal); // ram
+      face(span * 0.25, 1.5, 0.02, 0.16, 0.16, 0.03, [0.9, 0.9, 0.85], MAT.painted); // gauge
+      face(span * 0.25, 1.5, 0.04, 0.1, 0.012, 0.01, [0.8, 0.1, 0.1], -1);
+      for (const sd of [-0.3, 0.3]) this.worldRound.box(x - n[0] * half * 0.8 + n[1] * sd, 2.6, z - n[1] * half * 0.8 + n[0] * sd, 0.09, 1.0, 0.09, [0.9, 0.9, 0.9], MAT.rust);
+      face(0, 0.5, 0.012, span * 0.6, 0.5, 0.02, DARK, MAT.gunmetal); // access door
+    } else if (mat === 9) {
+      // Tonic dispenser: rows of bottles behind glass, a chute and a keypad.
+      face(0, 1.35, 0.012, span * 0.74, 1.3, 0.02, [0.03, 0.05, 0.05], -1, 0, 0.06);
+      const liquids: RGB[] = [[0.2, 1, 0.9], [1, 0.4, 0.8], [1, 0.8, 0.2], [0.5, 0.6, 1]];
+      for (let row = 0; row < 3; row++) for (let k = 0; k < 3; k++) face(-span * 0.22 + k * span * 0.22, 0.95 + row * 0.38, 0.03, 0.08, 0.2, 0.05, liquids[(row + k) % 4], -1, 0.9, 0.2);
+      face(0, 0.38, 0.02, span * 0.5, 0.18, 0.04, DARK, MAT.polymer);
+      face(span * 0.33, 1.3, 0.02, 0.08, 0.2, 0.03, STEEL, MAT.gunmetal);
+      this.world.box(x, y1 + 0.05, z, w + 0.06, 0.1, d + 0.06, [0.2, 0.5, 0.48], MAT.painted);
+    } else if (mat === 10) {
+      // Workbench: a vice, a pegboard of tools and a shelf.
+      this.world.box(x + n[1] * span * 0.3, y1 + 0.08, z + n[0] * span * 0.3, 0.14, 0.16, 0.2, STEEL, MAT.gunmetal, 0, 0, yaw);
+      this.world.box(x - n[0] * half * 0.8, y1 + 0.5, z - n[1] * half * 0.8, n[0] !== 0 ? 0.04 : w, 0.9, n[0] !== 0 ? d : 0.04, [0.6, 0.5, 0.4], MAT.wood);
+      for (let k = 0; k < 4; k++) this.world.box(x - n[0] * (half * 0.8 - 0.04) + n[1] * (-0.5 + k * 0.33), y1 + 0.55, z - n[1] * (half * 0.8 - 0.04) + n[0] * (-0.5 + k * 0.33), 0.04, 0.3, 0.04, k % 2 ? [0.7, 0.2, 0.1] : STEEL, MAT.gunmetal);
+      this.world.box(x, 0.3, z, w * 0.9, 0.04, d * 0.9, [0.6, 0.5, 0.4], MAT.wood);
+    } else if (mat === 11) {
+      // Console: a tilted screen, a keyboard and status lamps.
+      face(0, y1 + 0.28, -half * 0.5, span * 0.8, 0.5, 0.05, DARK, MAT.polymer);
+      face(0, y1 + 0.28, -half * 0.5 + 0.03, span * 0.7, 0.4, 0.01, [0.1, 0.5, 0.6], -1, 1.2);
+      this.world.box(x + n[0] * half * 0.3, y1 + 0.02, z + n[1] * half * 0.3, n[0] !== 0 ? 0.2 : span * 0.6, 0.03, n[0] !== 0 ? span * 0.6 : 0.2, [0.2, 0.2, 0.22], MAT.polymer);
+      for (let k = 0; k < 3; k++) face(-0.2 + k * 0.2, y1 - 0.2, 0.012, 0.05, 0.05, 0.02, [[0.2, 1, 0.3], [1, 0.7, 0.1], [1, 0.2, 0.1]][k], -1, 3);
+    } else if (mat === 12) {
+      // Wall-buy stand: a steel post with a price plate and a hazard-striped foot.
+      this.world.box(x, 0.04, z, w + 0.2, 0.08, d + 0.2, [0.85, 0.65, 0.1], MAT.painted);
+      this.world.box(x, y1 + 0.02, z, w + 0.12, 0.04, d + 0.12, STEEL, MAT.gunmetal);
+      face(0, y1 * 0.6, 0.012, span * 0.8, 0.2, 0.02, [0.9, 0.9, 0.85], MAT.painted);
+      face(0, y1 * 0.6, 0.025, span * 0.5, 0.03, 0.01, DARK, -1);
+    }
   }
 
   /** Crate stacks get dark steel corner straps. */
