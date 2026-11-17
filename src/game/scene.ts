@@ -48,7 +48,7 @@ interface Tracer { a: number[]; b: number[]; t: number; color: RGB }
 interface Flash { pos: number[]; t: number; life: number; color: RGB; radius: number; size: number; glow?: number; vel?: number[]; rise?: number }
 interface LightSrc { pos: number[]; radius: number; color: RGB; intensity: number; flicker?: number }
 
-export interface SceneSettings { fov: number; motionBlur: boolean; dof: boolean; /** 0 first person .. 1 third person. */ third?: number; /** Which way our own body faces in third person (default: the view). */ bodyYaw?: number }
+export interface SceneSettings { fov: number; motionBlur: boolean; dof: boolean; /** 0 first person .. 1 third person. */ third?: number; /** Which way our own body faces in third person (default: the view). */ bodyYaw?: number; /** Draw neither our body nor the gun in hand (menu panoramas). */ noSelf?: boolean }
 
 /** A character's facing frame: positions are given as (right, up, forward) offsets. */
 function frame(x: number, y: number, z: number, yaw: number) {
@@ -64,6 +64,7 @@ function chain(at: (x: number, y: number, z: number) => V3, root: [number, numbe
   return [at(...k), at(...e)];
 }
 
+let sceneIds = 0;
 export class Scene {
   private cube: number;
   private sphere: number;
@@ -80,6 +81,10 @@ export class Scene {
   private smokeAt = 0;
   private prevViewProj = mat4();
   private frameData = new Batch();
+  private staticCount = -1;
+  private staticDraws: Draw[] = [];
+  /** Identifies this scene's static instances to the renderer, which uploads them only once. */
+  private readonly staticId = ++sceneIds;
   private lights = new Float32Array(MAX_LIGHTS * LIGHT_FLOATS);
   private time = 0;
   private kick = 0;
@@ -962,7 +967,7 @@ export class Scene {
     for (const p of s.players()) if (p.rec[P.life] !== 2) this.survivor(round, glows, groups, p, t, dt);
     // Third person: our own body is drawn like anyone else's, where our feet are.
     const third = (settings.third ?? 0) > 0.25;
-    if (third && me.length && me[P.life] !== 2) {
+    if (third && !settings.noSelf && me.length && me[P.life] !== 2) {
       const f = s.feet();
       this.survivor(round, glows, groups, { id: s.selfId, x: f[0], y: f[1], z: f[2], yaw: settings.bodyYaw ?? view.yaw, rec: me }, t, dt);
     }
@@ -1212,20 +1217,31 @@ export class Scene {
     const shadowViewProj = mul(mat4(), ortho(mat4(), -R, R, -R, R, 1, 160), shadowView);
 
     // Assemble the instance buffer. Cube casters, sphere casters, then everything without shadows.
+    // The level itself never changes: it sits at the front of the buffer, copied (and uploaded to
+    // the GPU) once; each frame only appends the things that move.
     const out = this.frameData;
-    out.n = 0;
-    const draws: Draw[] = [];
+    if (this.staticCount < 0) {
+      out.n = 0;
+      const keep = (mesh: number, batch: Batch, shadow: boolean) => {
+        if (!batch.n) return;
+        this.staticDraws.push({ mesh, first: out.n, count: batch.n, shadow });
+        out.append(batch);
+      };
+      keep(this.cube, this.world, true);
+      keep(this.cylinder, this.worldRound, true);
+      this.scenery.draws(keep);
+      keep(this.cube, this.worldGlow, false);
+      this.staticCount = out.n;
+    }
+    out.n = this.staticCount;
+    const draws: Draw[] = this.staticDraws.slice();
     const add = (mesh: number, batch: Batch, shadow: boolean) => {
       if (!batch.n) return;
       draws.push({ mesh, first: out.n, count: batch.n, shadow });
       out.append(batch);
     };
-    add(this.cube, this.world, true);
     add(this.cube, casters, true);
-    add(this.cylinder, this.worldRound, true);
-    this.scenery.draws(add);
     add(this.sphere, round, true);
-    add(this.cube, this.worldGlow, false);
     add(this.cube, glows, false);
     add(this.sphere, vm, false);
     for (const part of Object.values(this.parts)) { add(part.mesh, part.batch, true); add(part.mesh, part.vm, false); }
@@ -1252,6 +1268,8 @@ export class Scene {
       lightCount,
       instances: out.data,
       instanceCount: out.n,
+      staticCount: this.staticCount,
+      staticId: this.staticId,
       draws,
       post: {
         exposure: 1.0,

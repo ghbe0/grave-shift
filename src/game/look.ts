@@ -92,7 +92,7 @@ export const CROSSHAIRS = ['Classic', 'Dot', 'Circle', 'T-Shape'];
 export const COLORS: { name: string; css: string }[] = [
   { name: 'Red', css: '#ff3b30' },
   { name: 'Green', css: '#37d65f' },
-  { name: 'Amber', css: '#ffb000' },
+  { name: 'Ice', css: '#cfe9ff' },
   { name: 'Cyan', css: '#32d4ff' },
   { name: 'Magenta', css: '#ff4fd8' },
   { name: 'White', css: '#ffffff' },
@@ -100,12 +100,12 @@ export const COLORS: { name: string; css: string }[] = [
 /** Calling card backgrounds. */
 export const CARDS: { name: string; css: string }[] = [
   { name: 'Steel', css: 'linear-gradient(120deg, #2b3440, #151a21)' },
-  { name: 'Ember', css: 'linear-gradient(120deg, #ff7a2f, #6b1d0b 70%)' },
+  { name: 'Glacier', css: 'linear-gradient(120deg, #8fd0ff, #123a63 70%)' },
   { name: 'Deep Sea', css: 'linear-gradient(120deg, #0f4c75, #0b1622 75%)' },
   { name: 'Toxic', css: 'radial-gradient(circle at 20% 30%, #9be22d, #1d3a10 70%)' },
   { name: 'Royal', css: 'linear-gradient(120deg, #6c2bd9, #1a0b33 75%)' },
-  { name: 'Hazard', css: 'repeating-linear-gradient(135deg, #ffc400 0 14px, #1b1b1b 14px 28px)' },
-  { name: 'Dusk', css: 'linear-gradient(180deg, #ff9a5a, #7b2f6b 55%, #1b1530)' },
+  { name: 'Hazard', css: 'repeating-linear-gradient(135deg, #3d9bff 0 14px, #1b1b1b 14px 28px)' },
+  { name: 'Midnight', css: 'linear-gradient(180deg, #5f8fd0, #24346b 55%, #0b0f1e)' },
   { name: 'Carbon', css: 'repeating-linear-gradient(45deg, #1a1a1a 0 4px, #262626 4px 8px)' },
 ];
 /** Emblems: simple original SVG marks (24x24 view box). */

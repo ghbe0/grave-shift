@@ -7,18 +7,19 @@ import { ACTIONS, defaultBinds, keyName, rebind, saveBinds } from './engine/bind
 import { Ticker } from './engine/ticker';
 import { isTouchDevice, TouchControls } from './engine/touch';
 import { Scene } from './game/scene';
-import { Session } from './game/session';
+import { Session, type View } from './game/session';
 import { frameRateOptions, FrameLimiter, FrameMeter, isFpsLimit } from './engine/pacing';
 import { streamMaterials, type MaterialStream } from './gfx/materials';
 import { createRenderer, TEXTURE_QUALITY, type Renderer, type TextureQuality } from './gfx/renderer';
 import { clientToken, GuestLobby, HostLobby, MODES, type KickReason, type LobbyState, type StartMsg } from './netcode/lobby';
-import { defaultRules, HEALTH_CHOICES, POINTS_CHOICES, RESPAWN_CHOICES, ROUND_CHOICES, rulesSummary, scoreChoices, TEAM_CSS, TEAM_NAMES, TIME_CHOICES, type Choice, type Rules } from './game/rules';
+import { cleanRules, defaultRules, HEALTH_CHOICES, POINTS_CHOICES, RESPAWN_CHOICES, ROUND_CHOICES, rulesSummary, scoreChoices, TEAM_CSS, TEAM_NAMES, TIME_CHOICES, type Choice, type Rules } from './game/rules';
 import { codeFromUrl, normalizeCode, partyLink, setUrlCode } from './netcode/party';
 import { createTransport, NetError } from './netcode/transport';
 import { BOOTS, BUILDS, EYEWEAR, FACES, GLOVES, HELMETS, PACKS, PADS, SKINS, SLEEVES, CAMOS, CARDS, cardHtml, COLORS, CROSSHAIRS, DEFAULT_LOOK, EMBLEMS, FATIGUES, HEADGEAR, loadLook, RETICLES, reticleSvg, saveLook, VESTS, type Look } from './game/look';
 import { matOffset } from './gfx/renderer';
 import { escapeHtml, Hud } from './ui/hud';
 import { LoadoutEditor } from './ui/loadout';
+import { MODE_ICONS, PICKER_ART, tilePicker } from './ui/picker';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const params = new URLSearchParams(location.search);
@@ -38,8 +39,10 @@ interface Settings {
   /** On-screen controls: follow the device, or force on/off. */
   touch: 'auto' | 'on' | 'off';
   touchSens: number;
+  /** Lower the resolution on the fly when frames run long, and raise it again when they don't. */
+  dynRes: boolean;
 }
-const DEFAULTS: Settings = { sens: 1, fov: 90, volume: 0.5, blur: true, dof: true, textures: 'high', fpsLimit: 0, showFps: false, renderScale: 1, touch: 'auto', touchSens: 1, mapSize: 190, mapRotate: 1, mapRange: 24 };
+const DEFAULTS: Settings = { sens: 1, fov: 90, volume: 0.5, blur: true, dof: true, textures: 'high', fpsLimit: 0, showFps: false, renderScale: 1, touch: 'auto', touchSens: 1, dynRes: true, mapSize: 190, mapRotate: 1, mapRange: 24 };
 /** Phones start lighter: they have less GPU and memory than a desktop, and post effects cost the most. */
 const PHONE_DEFAULTS: Partial<Settings> = { textures: 'medium', blur: false, dof: false, renderScale: 0.75, fov: 80 };
 function loadSettings(): Settings {
@@ -108,6 +111,10 @@ class App {
   meter = new FrameMeter(storedHz());
   private shownHz = -1;
   private lastHud = 0;
+  /** Dynamic resolution: the current fraction of the chosen resolution, and how long frames have run slow or fast. */
+  private dyn = 1;
+  private dynSlow = 0;
+  private dynFast = 0;
 
   async init(): Promise<void> {
     this.sim = await loadSim();
@@ -116,7 +123,8 @@ class App {
     this.resize();
     addEventListener('resize', () => this.resize());
     const tex = TEXTURE_QUALITY[this.settings.textures];
-    const quality = { shadowSize: params.has('low') ? 1024 : this.settings.textures === 'ultra' ? 4096 : 2048, post: !params.has('low'), offscreen: params.has('offscreen'), textureSize: tex.size, anisotropy: tex.anisotropy };
+    const phone = isTouchDevice();
+    const quality = { maxLights: phone ? 8 : undefined, shadowSize: params.has('low') || phone ? 1024 : this.settings.textures === 'ultra' ? 4096 : 2048, post: !params.has('low'), offscreen: params.has('offscreen'), textureSize: tex.size, anisotropy: tex.anisotropy };
     this.renderer = await createRenderer(this.canvas, params.get('renderer'), quality);
     this.canvas = $<HTMLCanvasElement>('canvas') ?? this.canvas;
     this.rendererName = this.renderer.kind === 'webgpu' ? 'WebGPU' : 'WebGL2 (fallback)';
@@ -134,6 +142,8 @@ class App {
 
     const code = codeFromUrl();
     this.show('main');
+    if (params.has('shot')) this.openShot(+params.get('shot')! || 0);
+    else this.startPanorama();
     if (code) {
       $<HTMLInputElement>('join-code').value = code;
       // Joining needs a name; if we have one saved, go straight in.
@@ -235,7 +245,7 @@ class App {
         { key: 'sleeves', title: 'Sleeves', options: g('sleeves', SLEEVES) },
       ] },
       { tab: 'Gear', sections: [
-        { key: 'vest', title: 'Plate carrier', options: [{ name: 'Team colour', art: `<i class="sw" style="background:linear-gradient(135deg,#ff7a2f 50%,#3d8bff 50%)"></i>` }, ...VESTS.map(v => ({ name: v.name, art: sw(v.rgb) }))] },
+        { key: 'vest', title: 'Plate carrier', options: [{ name: 'Team colour', art: `<i class="sw" style="background:linear-gradient(135deg,#e0323c 50%,#3d8bff 50%)"></i>` }, ...VESTS.map(v => ({ name: v.name, art: sw(v.rgb) }))] },
         { key: 'fatigues', title: 'Fatigues', options: FATIGUES.map(f => ({ name: f.name, art: fabric(f.rgb) })) },
         { key: 'gloves', title: 'Gloves', options: GLOVES.map(x => ({ name: x.name, art: x.rgb[0] ? fabric(x.rgb) : word('✋') })) },
         { key: 'boots', title: 'Boots', options: BOOTS.map(x => ({ name: x.name, art: fabric(x.rgb) })) },
@@ -278,9 +288,49 @@ class App {
     const session = new Session(this.sim, start, 0, null, null);
     this.session = session;
     this.showroom = true;
+    document.body.classList.remove('pano');
     this.looks.set(0, this.look);
     this.scene = new Scene(this.renderer, this.sim, session, id => this.lookOf(id), 0.6);
     document.body.classList.add('showroom');
+  }
+  /** `?shot=MAP`: a fixed scenic camera on a map, used to render the menu panoramas and map pictures. */
+  shotView: View | null = null;
+  shotFrames = 0;
+  shotUrl = '';
+  openShot(map: number): void {
+    const start: StartMsg = { t: 'start', map, mode: 1, seed: 7, rules: defaultRules(1), players: [{ id: 0, team: 0, loadout: this.editor.loadout, look: this.look }] };
+    const session = new Session(this.sim, start, 0, null, null);
+    this.session = session;
+    this.scene = new Scene(this.renderer, this.sim, session, id => this.lookOf(id), params.has('detail') ? +params.get('detail')! : 1);
+    const f = session.feet();
+    const num = (k: string, d: number) => (params.has(k) ? +params.get(k)! : d);
+    let yaw = 0, clear = -1;
+    for (let k = 0; k < 24; k++) {
+      const a = (k / 24) * Math.PI * 2;
+      const c = session.game.raycast([f[0], f[1] + 1.7, f[2]], [-Math.sin(a), 0, -Math.cos(a)], 80);
+      if (c > clear) { clear = c; yaw = a; }
+    }
+    this.shotView = { pos: [num('x', f[0]), num('y', f[1] + 1.7), num('z', f[2])], yaw: num('yaw', yaw), pitch: num('pitch', -0.04), roll: 0, fov: num('fov', 75) };
+    $('menu').classList.add('clear');
+  }
+  /** The main menu backdrop: each map in turn, panning slowly and crossfading, like a title screen. */
+  private startPanorama(): void {
+    const layers = [...document.querySelectorAll<HTMLElement>('#panorama .layer')];
+    const maps = this.sim.catalog.maps;
+    let i = Math.floor(Math.random() * maps.length), k = 0;
+    const next = () => {
+      if (!document.body.classList.contains('pano') || document.hidden) return;
+      const el = layers[k++ % 2], old = layers[k % 2];
+      el.style.backgroundImage = `url(assets/maps/${i}.jpg)`;
+      el.className = 'layer';
+      void el.offsetWidth;
+      el.className = 'layer in';
+      if (old.classList.contains('in')) old.className = 'layer out';
+      $('pano-name').textContent = maps[i].name;
+      i = (i + 1) % maps.length;
+    };
+    next();
+    setInterval(next, 15000);
   }
   private closeShowroom(): void {
     if (!this.showroom) return;
@@ -305,9 +355,31 @@ class App {
     if (!this.host && !this.guest) this.hud.setNames([{ id: 0, name }]);
   }
 
+  /**
+   * Holds the frame rate up by trading resolution: aim for the display's rate (or the cap) but never
+   * above 60 fps, so a 144 Hz monitor running at 100 fps keeps full resolution. Drops fast (one slow
+   * second), recovers slowly, and never goes below 55% of the chosen resolution.
+   */
+  private adaptResolution(dt: number): void {
+    if (!this.settings.dynRes || params.has('low') || this.screen !== 'none') return;
+    const hz = this.settings.fpsLimit || this.meter.displayHz || 60;
+    const target = Math.max(1000 / hz, 1000 / 60), ms = this.meter.frameMs;
+    if (!ms) return;
+    this.dynSlow = ms > target * 1.25 ? this.dynSlow + dt : Math.max(0, this.dynSlow - dt);
+    this.dynFast = ms < target * 1.08 ? this.dynFast + dt : 0;
+    let next = this.dyn;
+    if (this.dynSlow > 1) next = Math.max(0.55, this.dyn * 0.88);
+    else if (this.dynFast > 6 && this.dyn < 1) next = Math.min(1, this.dyn * 1.08);
+    if (next !== this.dyn) {
+      this.dyn = next;
+      this.dynSlow = this.dynFast = 0;
+      this.resize();
+    }
+  }
+
   private resize(): void {
     // ?low renders at half resolution for weak GPUs (and the automated browser tests).
-    const dpr = Math.min(devicePixelRatio, 2) * (params.has('low') ? 0.5 : this.settings.renderScale);
+    const dpr = Math.min(devicePixelRatio, 2) * (params.has('low') ? 0.5 : this.settings.renderScale) * this.dyn;
     const [w, h] = [Math.round(innerWidth * dpr), Math.round(innerHeight * dpr)];
     this.canvas.width = w;
     this.canvas.height = h;
@@ -316,6 +388,10 @@ class App {
 
   private show(screen: string): void {
     this.screen = screen;
+    if (screen === 'solo' || screen === 'lobby') $(`${screen}-slot`).append($('match-setup'));
+    if (screen !== 'solo' && screen !== 'loadout') this.solo = screen === 'none' ? this.solo : null;
+    document.body.classList.toggle('pano', !this.session);
+    $('menu').scrollTop = 0;
     for (const el of document.querySelectorAll<HTMLElement>('.screen')) el.hidden = el.id !== `screen-${screen}`;
     $('menu').classList.toggle('clear', screen === 'none');
   }
@@ -333,7 +409,9 @@ class App {
     }
 
     const click = (id: string, fn: () => void) => { $(id).onclick = () => { this.sfx.unlock(); fn(); }; };
-    click('btn-solo', () => this.startSolo());
+    click('btn-solo', () => this.openSolo());
+    click('btn-solo-back', () => { this.solo = null; this.show('main'); });
+    click('btn-solo-go', () => this.openLoadout('solo', 'Deploy', () => this.startSolo()));
     // Every button and menu control ticks.
     document.addEventListener('click', e => { if ((e.target as HTMLElement)?.closest?.('button, select, input[type=checkbox], summary')) this.sfx.ui(); }, true);
     click('btn-host', () => void this.hostParty());
@@ -362,8 +440,14 @@ class App {
     addEventListener('pointerup', () => (dragX = null));
     this.hud.applyLook(this.look);
     click('btn-lobby-loadout', () => this.openLoadout('lobby'));
-    click('btn-loadout-done', () => { if (this.editor.check()) this.show(this.back); });
+    click('btn-loadout-done', () => {
+      if (!this.editor.check()) return;
+      const next = this.afterLoadout;
+      this.afterLoadout = null;
+      if (next) next(); else this.show(this.back);
+    });
     click('btn-loadout-reset', () => this.editor.reset());
+    click('btn-loadout-back', () => { if (this.editor.check()) { this.afterLoadout = null; this.show(this.back); } });
     click('btn-binds-reset', () => { this.input.binds = defaultBinds(); saveBinds(this.input.binds); this.input.applyBinds(); this.renderBinds(); });
     this.renderBinds();
     click('btn-settings', () => this.openSettings('main'));
@@ -394,10 +478,18 @@ class App {
       this.guest?.setReady(!me?.ready);
     });
     const mode = $<HTMLSelectElement>('lobby-mode'), map = $<HTMLSelectElement>('lobby-map');
-    MODES.forEach(m => mode.add(new Option(`${m.name} (up to ${m.max})`, String(m.id))));
+    MODES.forEach(m => mode.add(new Option(m.name, String(m.id))));
     this.sim.catalog.maps.forEach(m => map.add(new Option(m.name, String(m.id))));
-    mode.onchange = () => this.host?.setMode(+mode.value);
-    map.onchange = () => this.host?.setMap(+map.value);
+    mode.onchange = () => {
+      if (this.host) this.host.setMode(+mode.value);
+      else if (this.solo) { this.solo.mode = +mode.value; this.solo.rules = defaultRules(this.solo.mode); this.renderSolo(); }
+    };
+    map.onchange = () => {
+      if (this.host) this.host.setMap(+map.value);
+      else if (this.solo) { this.solo.map = +map.value; this.renderSolo(); }
+    };
+    tilePicker(mode, v => `${MODE_ICONS[+v] ?? ''}<em>up to ${MODES[+v]?.max}</em>`, 'modes');
+    tilePicker(map, v => `<img src="assets/maps/${v}-s.jpg" alt="" draggable="false" onerror="this.remove()">`, 'maps');
     // Match settings: only the host can change them; guests see them read-only.
     const fill = (id: string, choices: Choice[]) => { const el = $<HTMLSelectElement>(id); el.replaceChildren(...choices.map(c => new Option(c[1], String(c[0])))); };
     fill('rule-time', TIME_CHOICES);
@@ -407,7 +499,12 @@ class App {
     fill('rule-points', POINTS_CHOICES);
     const rule = (id: string, key: keyof Rules) => {
       const el = $<HTMLInputElement | HTMLSelectElement>(id);
-      el.onchange = () => this.host?.setRules({ [key]: el instanceof HTMLInputElement && el.type === 'checkbox' ? el.checked : +el.value });
+      el.onchange = () => {
+        const patch = { [key]: el instanceof HTMLInputElement && el.type === 'checkbox' ? el.checked : +el.value };
+        if (this.host) this.host.setRules(patch);
+        else if (this.solo) { this.solo.rules = cleanRules({ ...this.solo.rules, ...patch }, this.solo.mode); this.renderSolo(); }
+      };
+      if (el instanceof HTMLSelectElement) tilePicker(el, PICKER_ART[id.replace('rule-', '')], 'small');
     };
     rule('rule-time', 'timeLimit');
     rule('rule-score', 'scoreLimit');
@@ -432,6 +529,7 @@ class App {
     bind('set-blur', 'blur', () => {});
     bind('set-dof', 'dof', () => {});
     bind('set-showfps', 'showFps', () => ($('fps').hidden = !s.showFps));
+    bind('set-dynres', 'dynRes', () => { if (!s.dynRes) { this.dyn = 1; this.resize(); } });
     $('fps').hidden = !s.showFps;
     bind('set-scale', 'renderScale', () => { this.resize(); $('scale-value').textContent = `${Math.round(s.renderScale * 100)}%`; });
     $('scale-value').textContent = `${Math.round(s.renderScale * 100)}%`;
@@ -445,6 +543,7 @@ class App {
       el.onchange = () => { s[key] = +el.value; applyMap(); saveSettings(s); };
     }
     applyMap();
+    for (const id of ['set-mapsize', 'set-maprotate', 'set-maprange', 'set-touch']) tilePicker($<HTMLSelectElement>(id), PICKER_ART[id], 'small');
     bind('set-touchsens', 'touchSens', () => { if (this.input.touch) this.input.touch.sensitivity = s.touchSens; });
     const touchSel = $<HTMLSelectElement>('set-touch');
     touchSel.value = s.touch;
@@ -459,7 +558,9 @@ class App {
       saveSettings(s);
       this.applyTextures(true);
     };
+    tilePicker(texSel, PICKER_ART['set-tex'], 'small');
     const fpsSel = $<HTMLSelectElement>('set-fps');
+    tilePicker(fpsSel, PICKER_ART['set-fps'], 'small');
     this.updateDisplayHz(true);
     // The refresh rate can change (the window moved to another monitor): keep the menu in step.
     setInterval(() => this.updateDisplayHz(false), 1000);
@@ -475,7 +576,40 @@ class App {
   }
 
   private openCustomize(back: string): void { this.back = back; this.show('customize'); this.openShowroom(); this.renderCustomize(); }
-  private openLoadout(back: string): void { this.back = back; this.editor.close(); this.editor.render(); this.show('loadout'); }
+  /** Loadout screen; with `next`, its main button moves on (deploy, into the party) instead of going back. */
+  private afterLoadout: (() => void) | null = null;
+  private openLoadout(back: string, label = 'Done', next: (() => void) | null = null): void {
+    this.back = back;
+    this.afterLoadout = next;
+    $('btn-loadout-done').textContent = label;
+    this.editor.close();
+    this.editor.render();
+    this.show('loadout');
+  }
+
+  /** Solo match setup: mode, map and rules, then the loadout, then in. */
+  private solo: { mode: number; map: number; rules: Rules } | null = null;
+  private openSolo(): void {
+    let saved: { mode?: number; map?: number; rules?: unknown } = {};
+    try { saved = JSON.parse(localStorage.getItem('gs.solo') ?? '{}'); } catch { /* ignore */ }
+    const mode = MODES.some(m => m.id === saved.mode) ? saved.mode! : 0;
+    const map = typeof saved.map === 'number' && saved.map >= 0 && saved.map < this.sim.catalog.maps.length ? saved.map : 0;
+    this.solo = { mode, map, rules: cleanRules(saved.rules, mode) };
+    this.renderSolo();
+    this.show('solo');
+  }
+  private renderSolo(): void {
+    const c = this.solo;
+    if (!c) return;
+    try { localStorage.setItem('gs.solo', JSON.stringify(c)); } catch { /* ignore */ }
+    $<HTMLSelectElement>('lobby-mode').disabled = false;
+    $<HTMLSelectElement>('lobby-map').disabled = false;
+    $<HTMLSelectElement>('lobby-mode').value = String(c.mode);
+    $<HTMLSelectElement>('lobby-map').value = String(c.map);
+    $('lobby-mode-desc').textContent = MODES[c.mode].desc + (c.mode !== 0 ? '. Solo, this is a free run of the map: invite friends with Host a party to fight them.' : '');
+    this.renderRules(c.rules, c.mode, true);
+    $('rules-note').textContent = '';
+  }
   private openSettings(back: string): void {
     this.back = back;
     this.show('settings');
@@ -504,8 +638,9 @@ class App {
 
   private startSolo(): void {
     const seed = (Math.random() * 2 ** 31) | 0;
+    const c = this.solo ?? { mode: 0, map: 0, rules: defaultRules(0) };
     this.hud.setNames([{ id: 0, name: this.name() || 'You' }]);
-    this.begin({ t: 'start', map: 0, mode: 0, seed, rules: defaultRules(0), players: [{ id: 0, team: 0, loadout: this.editor.loadout, look: this.look }] }, 0);
+    this.begin({ t: 'start', map: c.map, mode: c.mode, seed, rules: c.rules, players: [{ id: 0, team: 0, loadout: this.editor.loadout, look: this.look }] }, 0);
   }
 
   private async hostParty(): Promise<void> {
@@ -516,7 +651,7 @@ class App {
       this.host.onChange = st => this.renderLobby(st);
       setUrlCode(this.host.code);
       this.renderLobby(this.host.state);
-      this.show('lobby');
+      this.openLoadout('lobby', 'Continue to party', () => this.show('lobby'));
     } catch (e) {
       this.error(e instanceof NetError && e.kind === 'network' ? 'Could not reach the matchmaking broker. Check your connection and try again.' : String((e as Error).message ?? e));
     } finally {
@@ -536,7 +671,7 @@ class App {
       g.onGone = reason => { this.teardown(); this.show('main'); this.error(KICK_TEXT[reason]); };
       setUrlCode(code);
       this.renderLobby(g.state);
-      this.show('lobby');
+      this.openLoadout('lobby', 'Continue to party', () => this.show('lobby'));
       if (g.state.inMatch) $('lobby-status').textContent = 'Match in progress. You will drop in shortly...';
     } catch (e) {
       const kind = e instanceof NetError ? e.kind : 'network';
@@ -736,9 +871,6 @@ class App {
     }
     if (this.input.touch) this.input.touch.sensitivity = this.settings.touchSens;
     document.body.classList.toggle('touch', on);
-    $('controls-hint').textContent = on
-      ? 'Left thumb: joystick (push all the way forward to sprint). Right thumb: drag to look; hold FIRE and drag to aim while shooting. AIM toggles aiming down sights.'
-      : 'WASD move · Shift sprint · C slide · Space jump, hold to thrust · run along walls · Mouse fire/aim · R reload · F use · Q ability · G/E equipment · V melee · Z tonic · hold T third person · Tab scores (all rebindable in Settings)';
   }
 
   private sound(e: Float32Array): void {
@@ -872,6 +1004,14 @@ class App {
       if (foot !== this.lastFoot) { this.lastFoot = foot; this.sfx.step(!!me[P['ctl.sprinting']]); }
     }
     let view = s.view(this.settings.fov);
+    if (this.shotView) {
+      // A few frames to settle (shadows, exposure), then stop so the page can be captured.
+      if (this.shotFrames++ > 40) return;
+      const frame = this.scene.build(this.shotView, dt, this.canvas.width / this.canvas.height, { fov: this.shotView.fov, motionBlur: false, dof: false, third: 1, noSelf: true });
+      this.renderer.render(frame);
+      if (this.shotFrames === 40) this.shotUrl = this.canvas.toDataURL('image/jpeg', +(params.get('q') ?? 0.8));
+      return;
+    }
     if (this.showroom) {
       // Showroom: the camera stands in front of the operator, a little to one side; dragging turns them.
       const f = s.feet();
@@ -908,8 +1048,9 @@ class App {
     }
     const frame = this.scene.build(view, dt, this.canvas.width / this.canvas.height, { fov: this.settings.fov, motionBlur: this.settings.blur, dof: this.settings.dof, third: this.third });
     this.renderer.render(frame);
+    this.adaptResolution(dt);
     // The HUD is DOM text: refreshing it faster than 60 Hz costs time and shows nothing new.
-    if (now - this.lastHud >= 16) {
+    if (now - this.lastHud >= (this.input.touch ? 33 : 16)) {
       this.lastHud = now;
       // The full map shows while its key is held; the zoom key steps through the minimap ranges.
       this.hud.minimap.expanded = this.input.fullMap;
@@ -923,7 +1064,7 @@ class App {
       }
       this.hud.update(s, this.input.scoreboard, p => this.scene?.project(p) ?? null);
       if (this.screen === 'pause') this.renderPauseTeams();
-      if (this.settings.showFps) $('fps').textContent = `${Math.round(this.meter.fps)} fps · ${this.meter.frameMs.toFixed(1)} ms${this.meter.displayHz ? ` · ${this.meter.displayHz} Hz display` : ''}`;
+      if (this.settings.showFps) $('fps').textContent = `${Math.round(this.meter.fps)} fps · ${this.meter.frameMs.toFixed(1)} ms${this.meter.displayHz ? ` · ${this.meter.displayHz} Hz display` : ''}${this.dyn < 1 ? ` · ${Math.round(this.dyn * 100)}% res` : ''}`;
     }
   }
 }

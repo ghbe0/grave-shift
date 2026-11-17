@@ -176,7 +176,7 @@ export class Minimap {
       if (!((b[o + 7] & 0xff) & 4)) continue;
       const tag = (b[o + 7] >> 8) - 1;
       const open = (hdr[H.doors] & (1 << tag)) !== 0;
-      g.fillStyle = open ? '#39d98a33' : '#ff9a3c';
+      g.fillStyle = open ? '#39d98a33' : '#7c8fa3';
       g.fillRect(b[o] * k, b[o + 2] * k, (b[o + 3] - b[o]) * k, (b[o + 5] - b[o + 2]) * k);
     }
     // Machines, stands and doors' prices (survival), from the list of things you can use.
@@ -184,12 +184,12 @@ export class Minimap {
       const it = s.inter;
       for (let o = 0, n = 0; o < it.length; o += 8, n++) {
         const [kind, x, , z, cost, param, , active] = it.subarray(o, o + 8);
-        if (kind === I.door) { if (!(hdr[H.doors] & (1 << param)) && full) this.text(g, `${cost}`, x * k, z * k, '#ffd08a', 9, upright); continue; }
+        if (kind === I.door) { if (!(hdr[H.doors] & (1 << param)) && full) this.text(g, `${cost}`, x * k, z * k, '#b8dcff', 9, upright); continue; }
         if (kind === I.barricade) {
           const boards = snap.barrs[param] ?? 6;
           g.save();
           g.translate(x * k, z * k);
-          g.fillStyle = boards === 0 ? `rgba(255,70,60,${0.5 + 0.5 * pulse})` : boards < 3 ? '#ffb347' : '#c9a36b';
+          g.fillStyle = boards === 0 ? `rgba(255,70,60,${0.5 + 0.5 * pulse})` : boards < 3 ? '#c8d3df' : '#8597aa';
           g.fillRect(-0.9 * k, -0.9 * k, 1.8 * k, 1.8 * k);
           g.restore();
           continue;
@@ -197,13 +197,13 @@ export class Minimap {
         if (kind === I.crate && n !== hdr[H.crate_at]) continue;
         if (kind === I.part) {
           if (hdr[H.parts] & (1 << param)) continue;
-          dot(x, z, 2.5 + pulse * 1.5, '#ffe27a');
+          dot(x, z, 2.5 + pulse * 1.5, '#8fd0ff');
           continue;
         }
         const powered = !!hdr[H.power];
         const style: Record<number, [string, string]> = {
           [I.wallbuy]: ['W', '#e8d8a8'], [I.perk]: ['P', PERK_CSS[param] ?? '#fff'], [I.crate]: ['?', '#5aa9ff'], [I.bench]: ['U', '#c66bff'],
-          [I.tonic]: ['T', '#2fd6c0'], [I.power]: ['⚡', powered ? '#39d98a' : '#ff4a3c'], [I.workbench]: ['B', '#c9a36b'], [I.console]: ['C', '#32d4ff'],
+          [I.tonic]: ['T', '#2fd6c0'], [I.power]: ['⚡', powered ? '#39d98a' : '#ff4a3c'], [I.workbench]: ['B', '#8597aa'], [I.console]: ['C', '#32d4ff'],
         };
         const st = style[kind];
         if (!st || !active) continue;
@@ -236,7 +236,7 @@ export class Minimap {
       } else if (kind >= 10 && kind < 15) {
         dot(x, z, 3.5 + pulse * 2, POWERUP_CSS[kind - 10] ?? '#fff', '#fff');
       } else if (kind >= 1 && kind <= 4) {
-        dot(x, z, kind === 4 ? 3 : 2.2, kind === 3 ? '#8fd0ff' : '#ffb04a', '#000');
+        dot(x, z, kind === 4 ? 3 : 2.2, kind === 3 ? '#8fd0ff' : '#e8eef5', '#000');
       } else if (kind === 30) {
         g.strokeStyle = `rgba(255,60,40,${0.5 + pulse * 0.5})`; g.lineWidth = 2;
         g.beginPath(); g.arc(x * k, z * k, 5 * k, 0, 6.3); g.stroke();
@@ -247,7 +247,7 @@ export class Minimap {
     for (const bl of this.blips) {
       const t = 1 - (bl.until - now) / bl.life;
       if (bl.kind === 'boom') {
-        g.strokeStyle = `rgba(255,170,60,${1 - t})`; g.lineWidth = 2;
+        g.strokeStyle = `rgba(200,225,255,${1 - t})`; g.lineWidth = 2;
         g.beginPath(); g.arc(bl.x * k, bl.z * k, (bl.r ?? 4) * k * (0.3 + t * 0.7), 0, 6.3); g.stroke();
       } else if (bl.kind === 'shot') {
         g.strokeStyle = `rgba(255,80,60,${1 - t})`; g.lineWidth = 1.5;
@@ -362,7 +362,7 @@ export class Minimap {
         g.fillRect(-1, -half + 2 * dpr, 2, (i % 2 ? 4 : 7) * dpr);
         g.restore();
       }
-      this.text(g, 'N', 0, -half + 15 * dpr, '#ff7a2f', 11 * dpr, -turn);
+      this.text(g, 'N', 0, -half + 15 * dpr, '#6fb6ff', 11 * dpr, -turn);
       // Teammates outside the window: a marker on the rim pointing their way.
       const info = MODES[s.start.mode];
       const mine = me[P.team];

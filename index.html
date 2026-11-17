@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#0d1014">
   <title>Grave Shift</title>
   <meta name="description" content="Grave Shift: a browser movement shooter with round-based co-op survival. Play solo or share a party link.">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23101418'/%3E%3Cpath d='M8 24V10l8-4 8 4v14h-5v-8h-6v8z' fill='%23ff7a2f'/%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23101418'/%3E%3Cpath d='M8 24V10l8-4 8 4v14h-5v-8h-6v8z' fill='%233d9bff'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/src/ui/style.css">
 </head>
 <body>
@@ -50,63 +50,68 @@
     <div id="scoreboard" hidden></div>
   </div>
 
+  <div id="panorama" aria-hidden="true"><div class="layer"></div><div class="layer"></div><div class="pano-shade"></div><div id="pano-name"></div></div>
   <div id="menu">
     <section id="screen-loading" class="screen"><h1>Grave Shift</h1><p id="loading-text">Loading...</p></section>
 
-    <section id="screen-main" class="screen" hidden>
-      <h1>Grave Shift</h1>
-      <p class="tag">Thrust. Wall-run. Survive the shift.</p>
-      <label>Player name <input id="name" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Pick a name"></label>
-      <div class="row">
-        <button id="btn-solo" class="primary">Play solo</button>
-        <button id="btn-host">Host a party</button>
+    <section id="screen-main" class="screen home" hidden>
+      <div class="brand"><h1>Grave Shift</h1><p class="tag">Thrust. Wall-run. Survive the shift.</p></div>
+      <label class="name-field">Player name <input id="name" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Pick a name"></label>
+      <div class="play">
+        <button id="btn-solo" class="play-tile primary"><svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="11" r="6" fill="currentColor"/><path d="M15 44l4-16-5-3 4-8h12l4 8-5 3 4 16h-5l-3-12-3 12z" fill="currentColor"/></svg><span>Solo<small>Pick a mode, map and rules</small></span></button>
+        <button id="btn-host" class="play-tile"><svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="16" cy="13" r="5" fill="currentColor"/><circle cx="32" cy="13" r="5" fill="currentColor"/><path d="M5 40c0-9 5-15 11-15s11 6 11 15zM21 40c0-9 5-15 11-15s11 6 11 15z" fill="currentColor" opacity=".8"/></svg><span>Host a party<small>Up to 12 friends with a code</small></span></button>
+        <div class="play-tile join"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M20 8H9v32h11M30 15l9 9-9 9M39 24H18" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg><input id="join-code" placeholder="PARTY CODE" maxlength="7" autocomplete="off" spellcheck="false" aria-label="Party code"><button id="btn-join">Join</button></div>
       </div>
-      <div class="row">
-        <input id="join-code" placeholder="PARTY CODE" maxlength="7" autocomplete="off" spellcheck="false">
-        <button id="btn-join">Join</button>
-      </div>
-      <div class="row">
-        <button id="btn-loadout">Loadout</button>
-        <button id="btn-customize">Customize</button>
-        <button id="btn-settings">Settings</button>
-      </div>
+      <nav class="icon-row">
+        <button id="btn-loadout" class="icon-btn" data-tip="Loadout" aria-label="Loadout"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M4 22h26l4-4h8v6h-4l-2 3H24l-3 9h-7l2-9H8l-4-2z" fill="currentColor"/><path d="M33 26v8h-4" fill="none" stroke="currentColor" stroke-width="2.5"/></svg></button>
+        <button id="btn-customize" class="icon-btn" data-tip="Operator" aria-label="Customize operator"><svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="13" r="8" fill="currentColor"/><path d="M8 44c0-11 7-18 16-18s16 7 16 18z" fill="currentColor"/><path d="M18 30l6 6 6-6" fill="none" stroke="#0b0f15" stroke-width="2.5"/></svg></button>
+        <button id="btn-settings" class="icon-btn" data-tip="Settings" aria-label="Settings"><svg viewBox="0 0 48 48" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M21 3h6l1.2 5.6a16 16 0 014.3 1.8l4.8-3.1 4.2 4.2-3.1 4.8a16 16 0 011.8 4.3L45 21v6l-5.6 1.2a16 16 0 01-1.8 4.3l3.1 4.8-4.2 4.2-4.8-3.1a16 16 0 01-4.3 1.8L27 45h-6l-1.2-5.6a16 16 0 01-4.3-1.8l-4.8 3.1-4.2-4.2 3.1-4.8a16 16 0 01-1.8-4.3L3 27v-6l5.6-1.2a16 16 0 011.8-4.3L7.3 10.7l4.2-4.2 4.8 3.1a16 16 0 014.3-1.8zM24 17a7 7 0 100 14 7 7 0 000-14z"/></svg></button>
+      </nav>
       <p id="main-error" class="error"></p>
-      <p class="hint" id="controls-hint"></p>
       <p class="hint" id="renderer-info"></p>
     </section>
 
-    <section id="screen-lobby" class="screen" hidden>
+    <section id="screen-solo" class="screen wide" hidden>
+      <div class="screen-head"><button id="btn-solo-back" class="back" aria-label="Back">&#8249;</button><h2>Solo match</h2></div>
+      <div id="solo-slot"></div>
+      <div class="row"><button id="btn-solo-go" class="primary big">Choose loadout &#8250;</button></div>
+    </section>
+
+    <section id="screen-lobby" class="screen wide" hidden>
       <h2>Party</h2>
       <div class="code-box">
         <div><span class="hint">Party code</span><div id="lobby-code" class="code"></div></div>
         <button id="btn-copy-code">Copy code</button>
       </div>
-      <p class="hint">Friends type this code into the party code box on the main menu and press Join, or just open the invite link.</p>
-      <p class="hint">Players connect directly to each other, so people who join can see your public IP address (as any website you visit can). Nothing else on your computer or network is exposed. Share the code only with people you trust.</p>
+            <p class="hint">Players connect directly to each other, so people who join can see your public IP address (as any website you visit can). Nothing else on your computer or network is exposed. Share the code only with people you trust.</p>
       <div class="row"><input id="lobby-link" readonly aria-label="Invite link"><button id="btn-copy">Copy invite link</button></div>
       <ul id="lobby-players"></ul>
       <label>Your name <input id="lobby-name" maxlength="16" autocomplete="off" spellcheck="false"></label>
-      <div class="row">
-        <label>Mode <select id="lobby-mode"></select></label>
-        <label>Map <select id="lobby-map"></select></label>
-      </div>
-      <p id="lobby-mode-desc" class="hint"></p>
-      <details id="lobby-rules">
-        <summary>Match settings <span id="rules-summary" class="hint"></span></summary>
-        <div class="rules-grid">
-          <label data-show="pvp">Time limit <select id="rule-time"></select></label>
-          <label data-show="score">Score limit <select id="rule-score"></select></label>
-          <label data-show="pvp">Respawn delay <select id="rule-respawn"></select></label>
-          <label>Health <select id="rule-health"></select></label>
-          <label data-show="survival">Starting round <select id="rule-round"></select></label>
-          <label data-show="survival">Starting points <select id="rule-points"></select></label>
-          <label class="check" data-show="teams"><input type="checkbox" id="rule-ff"> Friendly fire</label>
-          <label class="check" data-show="pvp"><input type="checkbox" id="rule-hs"> Headshots only</label>
-          <label class="check" data-show="abilities"><input type="checkbox" id="rule-abilities"> Abilities</label>
-          <label class="check" data-show="streaks"><input type="checkbox" id="rule-streaks"> Streaks</label>
+      <div id="lobby-slot"><div id="match-setup">
+        <h3>Mode</h3>
+        <select id="lobby-mode" aria-label="Mode"></select>
+        <p id="lobby-mode-desc" class="hint"></p>
+        <h3>Map</h3>
+        <select id="lobby-map" aria-label="Map"></select>
+        <div id="lobby-rules">
+          <h3>Match settings <span id="rules-summary" class="hint"></span></h3>
+          <div class="rules-grid">
+            <div class="rule" data-show="pvp"><h4>Time limit</h4><select id="rule-time"></select></div>
+            <div class="rule" data-show="score"><h4>Score limit</h4><select id="rule-score"></select></div>
+            <div class="rule" data-show="pvp"><h4>Respawn delay</h4><select id="rule-respawn"></select></div>
+            <div class="rule"><h4>Health</h4><select id="rule-health"></select></div>
+            <div class="rule" data-show="survival"><h4>Starting round</h4><select id="rule-round"></select></div>
+            <div class="rule" data-show="survival"><h4>Starting points</h4><select id="rule-points"></select></div>
+            <div class="toggles">
+              <label class="check" data-show="teams"><input type="checkbox" id="rule-ff"> Friendly fire</label>
+              <label class="check" data-show="pvp"><input type="checkbox" id="rule-hs"> Headshots only</label>
+              <label class="check" data-show="abilities"><input type="checkbox" id="rule-abilities"> Abilities</label>
+              <label class="check" data-show="streaks"><input type="checkbox" id="rule-streaks"> Streaks</label>
+            </div>
+          </div>
+          <p id="rules-note" class="hint"></p>
         </div>
-        <p id="rules-note" class="hint"></p>
-      </details>
+      </div></div>
       <p id="lobby-status" class="hint"></p>
       <div class="row">
         <button id="btn-start" class="primary">Start match</button>
@@ -122,7 +127,7 @@
       <p class="hint">Click a slot to choose what goes in it. Ten points: every weapon, attachment, perk, piece of equipment and wildcard costs one. Streaks, ability and tonics are free. Used in every versus mode (the Weapon Ladder hands out its own guns); Survival uses your ability and tonic pack.</p>
       <div id="loadout-grid"></div>
       <p id="loadout-error" class="error"></p>
-      <div class="row"><button id="btn-loadout-done" class="primary">Done</button><button id="btn-loadout-reset">Reset</button></div>
+      <div class="row"><button id="btn-loadout-back">Back</button><button id="btn-loadout-reset">Reset</button><button id="btn-loadout-done" class="primary big">Done</button></div>
     </section>
 
     <section id="screen-customize" class="screen" hidden>
@@ -134,30 +139,31 @@
         <button id="btn-cz-random">Randomize</button>
         <button id="btn-cz-reset">Reset</button>
       </div>
-      <p class="hint">Drag the operator to turn them. Hold T in a match to see yourself in third person.</p>
+      <p class="hint">Drag the operator to turn them.</p>
     </section>
 
     <section id="screen-settings" class="screen" hidden>
       <h2>Settings</h2>
       <h3>Profile</h3>
       <label>Player name <input id="set-name" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Letters, numbers, spaces"></label>
-      <label>Frame rate <select id="set-fps"></select></label>
+      <h4>Frame rate</h4><select id="set-fps"></select>
       <p id="display-hz" class="hint"></p>
-      <label>Texture quality <select id="set-tex"></select></label>
+      <h4>Texture quality</h4><select id="set-tex"></select>
       <p id="tex-status" class="hint"></p>
       <label>Field of view <input id="set-fov" type="range" min="70" max="110" step="1"></label>
       <label><input id="set-blur" type="checkbox"> Motion blur</label>
       <label><input id="set-dof" type="checkbox"> Depth of field</label>
       <label><input id="set-showfps" type="checkbox"> Show FPS counter</label>
+      <label><input id="set-dynres" type="checkbox"> Dynamic resolution (keeps the frame rate up)</label>
       <label>Resolution scale <span id="scale-value" class="hint"></span><input id="set-scale" type="range" min="0.5" max="1" step="0.05"></label>
       <h3>Controls</h3>
       <label>Mouse sensitivity <input id="set-sens" type="range" min="0.2" max="3" step="0.05"></label>
-      <label>On-screen touch controls <select id="set-touch"><option value="auto">Automatic (on for phones and tablets)</option><option value="on">On</option><option value="off">Off</option></select></label>
+      <h4>On-screen touch controls</h4><select id="set-touch"><option value="auto">Auto (phones, tablets)</option><option value="on">On</option><option value="off">Off</option></select>
       <label>Touch look sensitivity <input id="set-touchsens" type="range" min="0.3" max="3" step="0.05"></label>
       <h3>Minimap</h3>
-      <label>Minimap <select id="set-mapsize"><option value="0">Off</option><option value="150">Small</option><option value="190">Medium</option><option value="250">Large</option></select></label>
-      <label>Minimap turns <select id="set-maprotate"><option value="1">With your view</option><option value="0">Never (north is up)</option></select></label>
-      <label>Minimap range <select id="set-maprange"><option value="16">Close (16 m)</option><option value="24">Normal (24 m)</option><option value="36">Wide (36 m)</option><option value="55">Very wide (55 m)</option></select></label>
+      <h4>Minimap</h4><select id="set-mapsize"><option value="0">Off</option><option value="150">Small</option><option value="190">Medium</option><option value="250">Large</option></select>
+      <h4>Minimap turns</h4><select id="set-maprotate"><option value="1">With your view</option><option value="0">Never (north is up)</option></select>
+      <h4>Minimap range</h4><select id="set-maprange"><option value="16">Close (16 m)</option><option value="24">Normal (24 m)</option><option value="36">Wide (36 m)</option><option value="55">Very wide (55 m)</option></select>
       <h3>Key bindings</h3>
       <p class="hint">Click a binding, then press the key or mouse button you want. Esc cancels. The mouse wheel always switches weapon.</p>
       <div id="binds"></div>

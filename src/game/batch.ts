@@ -19,7 +19,9 @@ export class Batch {
     return o;
   }
   private tail(o: number, c: ArrayLike<number>, layer: number, metallic: number, roughness: number, emissive: number, flags: number): void {
-    this.data.set([c[0], c[1], c[2], layer + 1, metallic, roughness, emissive, flags], o + 16);
+    const d = this.data;
+    d[o + 16] = c[0]; d[o + 17] = c[1]; d[o + 18] = c[2]; d[o + 19] = layer + 1;
+    d[o + 20] = metallic; d[o + 21] = roughness; d[o + 22] = emissive; d[o + 23] = flags;
   }
   /** Box (or any unit mesh) with translation, scale and yaw/pitch/roll. `layer` -1 = untextured. */
   box(x: number, y: number, z: number, sx: number, sy: number, sz: number, c: ArrayLike<number>, layer = -1, emissive = 0, flags = 0, yaw = 0, pitch = 0, roll = 0, metallic = 0, roughness = 1): void {

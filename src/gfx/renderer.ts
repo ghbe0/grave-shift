@@ -70,6 +70,9 @@ export interface Frame {
   lightCount: number;
   instances: Float32Array;
   instanceCount: number;
+  /** The first `staticCount` instances are the same every frame while `staticId` stays the same. */
+  staticCount?: number;
+  staticId?: number;
   draws: Draw[];
   post: PostSettings;
 }
@@ -100,6 +103,8 @@ export interface Quality {
   anisotropy: number;
   /** WebGPU only: draw into an offscreen texture instead of the canvas (headless tests). */
   offscreen?: boolean;
+  /** Point lights shaded per pixel (phones use fewer). */
+  maxLights?: number;
 }
 
 /** Picks WebGPU when the browser has a working adapter, otherwise WebGL2. `prefer` forces one. */

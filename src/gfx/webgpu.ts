@@ -48,6 +48,7 @@ export class WebGPURenderer implements Renderer {
   private depth!: GPUTexture;
   private offscreen: GPUTexture | null = null;
   private bloom: GPUTexture[] = [];
+  private staticId = -1;
   private captureNext: ((img: ImageData) => void) | null = null;
   /** Offscreen only: a frame is still executing on the GPU. */
   private busy = false;
@@ -268,7 +269,7 @@ export class WebGPURenderer implements Renderer {
     g.set(f.viewmodelProj, 16);
     g.set(f.shadowViewProj, 32);
     g.set([f.camPos[0], f.camPos[1], f.camPos[2], 1, f.sunDir[0], f.sunDir[1], f.sunDir[2], 0, f.sunColor[0], f.sunColor[1], f.sunColor[2], 3.0, f.sky[0], f.sky[1], f.sky[2], f.fog,
-      Math.min(f.lightCount, MAX_LIGHTS), f.post.time, 1 / this.quality.shadowSize, VIEWMODEL_DEPTH], 48);
+      Math.min(f.lightCount, this.quality.maxLights ?? MAX_LIGHTS), f.post.time, 1 / this.quality.shadowSize, VIEWMODEL_DEPTH], 48);
     g.set(this.tiles, 68);
     g.set(f.lights.subarray(0, MAX_LIGHTS * LIGHT_FLOATS), 88);
     d.queue.writeBuffer(this.globalsBuf, 0, g);
@@ -277,8 +278,12 @@ export class WebGPURenderer implements Renderer {
       while (this.instanceCap < f.instanceCount) this.instanceCap *= 2;
       this.instanceBuf.destroy();
       this.instanceBuf = this.makeInstanceBuffer();
+      this.staticId = -1;
     }
-    d.queue.writeBuffer(this.instanceBuf, 0, f.instances as Float32Array<ArrayBuffer>, 0, f.instanceCount * INSTANCE_FLOATS);
+    // Upload the unchanging level once; after that only the moving instances.
+    const from = f.staticId !== undefined && f.staticId === this.staticId ? (f.staticCount ?? 0) * INSTANCE_FLOATS : 0;
+    if (f.instanceCount * INSTANCE_FLOATS > from) d.queue.writeBuffer(this.instanceBuf, from * 4, f.instances as Float32Array<ArrayBuffer>, from, f.instanceCount * INSTANCE_FLOATS - from);
+    this.staticId = f.staticId ?? -1;
 
     const p = this.postData;
     p.set(f.invViewProj, 0);

@@ -6,3 +6,4 @@ src/core/sim.wasm
 .codegraph/
 *.log
 e2e-results/
+tools/.scratch/

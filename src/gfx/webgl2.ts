@@ -317,6 +317,7 @@ export class WebGL2Renderer implements Renderer {
 
   resize(width: number, height: number): void { this.size = [Math.max(1, width), Math.max(1, height)]; }
 
+  private staticId = -1;
   render(f: Frame): void {
     const gl = this.gl, u = this.u;
     const gradeVec = [this.quality.post ? f.post.grain : 0, f.post.saturation, f.post.contrast, f.post.time] as const;
@@ -326,8 +327,12 @@ export class WebGL2Renderer implements Renderer {
     if (f.instanceCount > this.instanceCap) {
       this.instanceCap = Math.max(4096, f.instanceCount * 2);
       gl.bufferData(gl.ARRAY_BUFFER, this.instanceCap * INSTANCE_FLOATS * 4, gl.DYNAMIC_DRAW);
+      this.staticId = -1;
     }
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, data);
+    // Upload the unchanging level once; after that only the moving instances.
+    const from = f.staticId !== undefined && f.staticId === this.staticId ? (f.staticCount ?? 0) * INSTANCE_FLOATS : 0;
+    gl.bufferSubData(gl.ARRAY_BUFFER, from * 4, data, from);
+    this.staticId = f.staticId ?? -1;
 
     gl.uniformMatrix4fv(u.uViewProj, false, f.viewProj);
     gl.uniformMatrix4fv(u.uViewmodelProj, false, f.viewmodelProj);
@@ -340,7 +345,7 @@ export class WebGL2Renderer implements Renderer {
     gl.uniform1f(u.uExposure, f.post.exposure);
     gl.uniform4f(u.uGrade, ...gradeVec);
     gl.uniform1f(u.uShadowTexel, 1 / this.quality.shadowSize);
-    gl.uniform1i(u.uLightCount, Math.min(f.lightCount, MAX_LIGHTS));
+    gl.uniform1i(u.uLightCount, Math.min(f.lightCount, this.quality.maxLights ?? MAX_LIGHTS));
     gl.uniform4fv(u.uLights, f.lights.subarray(0, MAX_LIGHTS * LIGHT_FLOATS));
     gl.uniform4fv(u.uTiles, this.tiles);
     gl.uniform1i(u.uBase, 0);

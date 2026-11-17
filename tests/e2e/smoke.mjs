@@ -101,12 +101,21 @@ async function shoot(page, file) {
   await page.screenshot({ path: `${OUT}/${file}`, timeout: 120000 });
 }
 
+/** Main menu -> solo setup (defaults: Survival) -> loadout -> deploy. */
+async function playSolo(page) {
+  await page.evaluate(() => document.getElementById('btn-solo').click());
+  await page.waitForSelector('#screen-solo:not([hidden])');
+  await page.evaluate(() => document.getElementById('btn-solo-go').click());
+  await page.waitForSelector('#screen-loadout:not([hidden])');
+  await page.evaluate(() => document.getElementById('btn-loadout-done').click());
+}
+
 await check('site loads under the Pages sub-path with no errors or 404s', async () => {
   const page = await openPage('?low', 'main');
   const title = await page.title();
   const info = await page.textContent('#renderer-info');
   // A missing asset only shows up once a match loads models, so start one briefly.
-  await page.evaluate(() => document.getElementById('btn-solo').click());
+  await playSolo(page);
   await page.waitForFunction(() => window.app.session?.snap, null, { timeout: 20000 });
   await page.waitForTimeout(3000);
   await page.evaluate(() => { window.app.frame = () => {}; });
@@ -118,7 +127,7 @@ await check('site loads under the Pages sub-path with no errors or 404s', async 
 
 await check('solo survival on WebGL2: round starts and zombies spawn', async () => {
   const page = await openPage('?renderer=webgl2&low', 'webgl2');
-  await page.evaluate(() => document.getElementById('btn-solo').click());
+  await playSolo(page);
   await engage(page);
   await waitRound(page);
   await page.waitForTimeout(1500);
@@ -132,7 +141,7 @@ await check('solo survival on WebGL2: round starts and zombies spawn', async () 
 
 await check('solo survival on WebGPU (software adapter)', async () => {
   const page = await openPage('?renderer=webgpu&offscreen&low', 'webgpu');
-  await page.evaluate(() => document.getElementById('btn-solo').click());
+  await playSolo(page);
   await engage(page);
   await waitRound(page);
   await shoot(page, 'solo-webgpu.png');
@@ -159,15 +168,15 @@ await check('settings: texture quality, frame rate cap and FPS counter', async (
   if (await page.inputValue('#set-fps') !== '0') throw new Error('frame rate does not default to the display rate');
   if (await page.evaluate(() => localStorage.getItem('gs.displayHz')) !== String(hz)) throw new Error('detected rate not remembered');
   // Low textures: the GPU arrays are rebuilt at 128 px and every layer is regenerated at that size.
-  await page.selectOption('#set-tex', 'low');
+  await page.click('#set-tex + .picker [data-v="low"]');
   await page.waitForFunction(() => /Low textures/.test(document.getElementById('tex-status').textContent), null, { timeout: 60000 });
   const size = await page.evaluate(() => window.app.renderer.matSize);
   if (size !== 128) throw new Error(`material size ${size}`);
-  await page.selectOption('#set-fps', '30');
+  await page.click('#set-fps + .picker [data-v="30"]');
   await page.check('#set-showfps');
   await page.click('#btn-settings-done');
   // Play with a 30 fps cap: rendered frames must stay at or under the cap.
-  await page.evaluate(() => document.getElementById('btn-solo').click());
+  await playSolo(page);
   await engage(page);
   await page.waitForFunction(() => window.app.session?.snap, null, { timeout: 30000 });
   const before = await page.evaluate(() => window.app.meter.fps);
@@ -200,6 +209,8 @@ await check('phone: touch joystick, look, fire, pause', async () => {
   const setup = await page.evaluate(() => ({ touch: document.body.classList.contains('touch'), textures: window.app.settings.textures, scale: window.app.settings.renderScale }));
   if (!setup.touch) throw new Error('phone not detected as a touch device');
   await page.tap('#btn-solo');
+  await page.tap('#btn-solo-go');
+  await page.tap('#btn-loadout-done');
   await page.waitForFunction(() => window.app.session?.snap && window.app.input.touchEngaged && !document.getElementById('touch').hidden);
   const me = () => page.evaluate(() => {
     const a = window.app, s = a.session, P = a.sim.L.P, m = s.local();
@@ -245,6 +256,9 @@ await check('phone: touch joystick, look, fire, pause', async () => {
 /** Waits for the lobby; if it never shows, fails with whatever error the page is displaying. */
 async function reachLobby(page, who) {
   try {
+    // Entering a party opens the loadout first; carry on into the lobby.
+    await page.waitForSelector('#screen-loadout:not([hidden]), #screen-lobby:not([hidden])', { timeout: 60000 });
+    if (await page.isVisible('#screen-loadout')) await page.click('#btn-loadout-done');
     await page.waitForSelector('#screen-lobby:not([hidden])', { timeout: 60000 });
   } catch {
     const shown = (await page.textContent('#main-error').catch(() => '')) || 'no error on screen';
@@ -314,15 +328,14 @@ await check('team mode: match settings, teams, objectives and the pause roster',
   await guest.click('#btn-join');
   await reachLobby(guest, 'guest');
   // Domination with a custom score limit; the guest sees the settings but cannot change them.
-  await host.selectOption('#lobby-mode', '3');
-  await host.evaluate(() => { document.getElementById('lobby-rules').open = true; });
-  await host.selectOption('#rule-score', '100');
+  await host.click('#lobby-mode + .picker [data-v="3"]');
+  await host.click('#rule-score + .picker [data-v="100"]');
   await host.check('#rule-ff');
   await guest.waitForFunction(() => document.getElementById('rule-score').value === '100' && document.getElementById('rule-ff').checked, null, { timeout: 60000 });
   if (!(await guest.isDisabled('#rule-score'))) throw new Error('a guest can edit match settings');
   const summary = await guest.textContent('#rules-summary');
   const teams = await host.$$eval('#lobby-players .team', els => els.map(e => e.textContent));
-  if (teams.join() !== 'Ember,Cobalt') throw new Error(`lobby teams: ${teams}`);
+  if (teams.join() !== 'Crimson,Cobalt') throw new Error(`lobby teams: ${teams}`);
   await guest.click('#btn-ready');
   await host.waitForFunction(() => document.querySelector('#lobby-players')?.textContent.includes('ready'), null, { timeout: 60000 });
   await host.click('#btn-start');
@@ -339,7 +352,7 @@ await check('team mode: match settings, teams, objectives and the pause roster',
   await guest.evaluate(() => window.app.show('pause'));
   await guest.waitForFunction(() => document.querySelectorAll('#pause-teams .roster').length === 2, null, { timeout: 60000 });
   const roster = await guest.evaluate(() => document.getElementById('pause-teams').innerText.replace(/\s+/g, ' '));
-  if (!/Ember/i.test(roster) || !/Cobalt/i.test(roster) || !roster.includes('Host') || !roster.includes('Guest')) throw new Error(`pause roster: ${roster}`);
+  if (!/Crimson/i.test(roster) || !/Cobalt/i.test(roster) || !roster.includes('Host') || !roster.includes('Guest')) throw new Error(`pause roster: ${roster}`);
   if (!(await guest.isDisabled('#btn-switch-team'))) throw new Error('switching to make it 2 v 0 should be disabled');
   assertClean(host);
   assertClean(guest);

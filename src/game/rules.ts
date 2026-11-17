@@ -15,9 +15,9 @@ export const MODES: ModeInfo[] = [
 ];
 export const LADDER_RUNGS = 20;
 
-export const TEAM_NAMES = ['Ember', 'Cobalt'];
-export const TEAM_COLORS: [number, number, number][] = [[1.0, 0.42, 0.12], [0.18, 0.48, 1.0]];
-export const TEAM_CSS = ['#ff7a2f', '#3d8bff'];
+export const TEAM_NAMES = ['Crimson', 'Cobalt'];
+export const TEAM_COLORS: [number, number, number][] = [[0.86, 0.16, 0.2], [0.18, 0.48, 1.0]];
+export const TEAM_CSS = ['#e0323c', '#3d8bff'];
 
 export interface Rules {
   /** Seconds, 0 for no limit. */
