@@ -66,13 +66,15 @@ pub struct MapDef {
     pub quests: &'static [QuestDef],
     /// glTF props: (asset slug, col, row, y, yaw)
     pub props: &'static [(&'static str, f32, f32, f32, f32)],
+    /// Roof slabs over interiors: (col0, row0, col1, row1, height of the underside), inclusive.
+    pub roofs: &'static [(usize, usize, usize, usize, f32)],
     pub sun: [f32; 3],
     pub sun_color: [f32; 3],
     pub sky: [f32; 3],
     pub fog: f32,
 }
 
-pub static MAPS: [MapDef; 2] = [
+pub static MAPS: [MapDef; 3] = [
     MapDef {
         name: "Foundry 9",
         rows: &[
@@ -129,6 +131,7 @@ pub static MAPS: [MapDef; 2] = [
             },
         ],
         props: &[("generator", 28.0, 16.0, 0.0, 0.0)],
+        roofs: &[],
         // Dusk: low warm sun, long shadows, hazy horizon.
         sun: [-0.62, 0.34, 0.5],
         sun_color: [1.0, 0.58, 0.32],
@@ -167,11 +170,59 @@ pub static MAPS: [MapDef; 2] = [
             reward: Reward::Points(2000),
         }],
         props: &[],
+        roofs: &[],
         // Night under a cold moon; the lamps do most of the lighting.
         sun: [0.45, 0.55, -0.5],
         sun_color: [0.36, 0.44, 0.62],
         sky: [0.09, 0.11, 0.16],
         fog: 0.024,
+    },
+    MapDef {
+        name: "Mill Street",
+        rows: &[
+            "##################################",
+            "########z###############z#########",
+            "########b###############b#########",
+            "###!........i.#O.#.c..........p###",
+            "###...........#..w.............###",
+            "###..P........d..#.........P...###",
+            "###.......h...#..#.....hH......###",
+            "###.......h...w..d.............###",
+            "###...........#.R#.............###",
+            "#####w##d##w###..###w#d##w#d#w####",
+            "###.........T........S.......O.###",
+            "#zb..P......................P..bz#",
+            "###...............t.....T......###",
+            "###.O..SS......####d##w###d##w####",
+            "###..........T.#...............###",
+            "###......T.....#...............###",
+            "###............d..........h....###",
+            "###..P.....R...#....Hh....h....###",
+            "###..........S.#...........P...###",
+            "###.T..........w...............###",
+            "###.........j..#@.......c.....u###",
+            "#######b###############b##########",
+            "#######z###############z##########",
+            "##################################",
+        ],
+        doors: &[],
+        wallbuys: &[('!', 2), ('@', 3)],
+        perks: &[('i', 0), ('j', 1)],
+        zones: &[("Mill Street", 3, 3, 30, 20)],
+        parts: &[],
+        targets: &[],
+        quests: &[QuestDef {
+            name: "Lights On",
+            steps: &[(Step::Power, "Turn on the power in the corner shop"), (Step::Round(6), "Survive to round 6")],
+            reward: Reward::Points(2500),
+        }],
+        props: &[],
+        roofs: &[(3, 3, 14, 9, 3.6), (17, 3, 30, 9, 3.6), (15, 13, 30, 20, 4.4)],
+        // An overcast afternoon: soft high sun, pale sky, light haze.
+        sun: [0.35, 0.8, 0.3],
+        sun_color: [1.0, 0.96, 0.88],
+        sky: [0.5, 0.58, 0.68],
+        fog: 0.009,
     },
 ];
 
@@ -285,6 +336,13 @@ pub fn build(id: usize) -> Built {
                 b'O' => stand(&mut solids, c, 0.66, 0.36, 1.05, 14),
                 b'S' => stand(&mut solids, c, 1.0, 0.32, 0.85, 15),
                 b'R' => stand(&mut solids, c, 0.62, 0.52, 0.8, 16),
+                // A wall with a window opening: you can see and shoot through it, and climb through.
+                b'w' => {
+                    solids.push(Solid { bb: Aabb::new(v3(c.x - 1.0, 0.0, c.z - 1.0), v3(c.x + 1.0, 1.0, c.z + 1.0)), mat: 18, flags: 0, tag: -1, on: true });
+                    solids.push(Solid { bb: Aabb::new(v3(c.x - 1.0, 2.3, c.z - 1.0), v3(c.x + 1.0, WALL_H, c.z + 1.0)), mat: 18, flags: F_NONAV, tag: -1, on: true });
+                }
+                // A doorway: open below the lintel.
+                b'd' => solids.push(Solid { bb: Aabb::new(v3(c.x - 1.0, 2.4, c.z - 1.0), v3(c.x + 1.0, WALL_H, c.z + 1.0)), mat: 18, flags: F_NONAV, tag: -1, on: true }),
                 b'q' => {
                     stand(&mut solids, c, 0.5, 0.4, 1.2, 11);
                     b.inter.push(Inter { kind: I_CONSOLE, pos: at(1.2), cost: 0, param: 0, needs_power: true, active: true });
@@ -312,6 +370,10 @@ pub fn build(id: usize) -> Built {
         counts[tag as usize] += 1;
     }
     b.targets = def.targets.iter().map(|t| (v3(t.0, t.1, t.2), false)).collect();
+    // Roof slabs: you can stand on them, but they are not part of the ground floor's navigation.
+    for &(c0, r0, c1, r1, under) in def.roofs {
+        solids.push(Solid { bb: Aabb::new(v3(c0 as f32 * CELL, under, r0 as f32 * CELL), v3((c1 + 1) as f32 * CELL, under + 0.3, (r1 + 1) as f32 * CELL)), mat: 17, flags: F_NONAV, tag: -1, on: true });
+    }
     b.world.nav = Nav::build(&solids, v3(0.0, 0.0, 0.0), v3(size.0, 0.0, size.1), WALL_H);
     for (i, barr) in b.barrs.iter().enumerate() {
         for (dx, dz) in [(-0.5, -0.5), (0.5, -0.5), (-0.5, 0.5), (0.5, 0.5)] {

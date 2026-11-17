@@ -112,6 +112,8 @@ export class Scene {
       this.addBox(this.world, b, o);
       if (b[o + 6] === 1) this.trimWall(b, o);
       if (b[o + 6] === 2) this.crateDetail(b, o);
+      if (b[o + 6] === 17) this.roofDetail(b, o);
+      if (b[o + 6] === 18) this.openingDetail(b, o);
     }
     this.placeLamps();
     this.scenery = new Scenery(renderer, this.cube, this.sphere, this.cylinder, {
@@ -143,7 +145,8 @@ export class Scene {
     return false;
   }
   private addBox(batch: Batch, b: Float32Array, o: number): void {
-    const s = SURFACES[b[o + 6]] ?? SURFACES[1];
+    // 17: roof slab, 18: brick wall around a window or doorway.
+    const s = b[o + 6] === 17 ? { layer: MAT.concrete, tint: [0.8, 0.8, 0.82] as RGB } : b[o + 6] === 18 ? { layer: MAT.brick, tint: [1.25, 1.0, 0.9] as RGB } : SURFACES[b[o + 6]] ?? SURFACES[1];
     batch.box((b[o] + b[o + 3]) / 2, (b[o + 1] + b[o + 4]) / 2, (b[o + 2] + b[o + 5]) / 2, b[o + 3] - b[o], b[o + 4] - b[o + 1], b[o + 5] - b[o + 2], s.tint, s.layer);
   }
 
@@ -154,6 +157,48 @@ export class Scene {
     this.world.box(cx, 0.18, cz, w + 0.08, 0.36, d + 0.08, [0.55, 0.55, 0.6], MAT.painted);
     this.world.box(cx, 2.6, cz, w + 0.05, 0.12, d + 0.05, [0.8, 0.8, 0.8], MAT.concrete);
     this.world.box(cx, y1 - 0.1, cz, w + 0.12, 0.2, d + 0.12, [0.75, 0.75, 0.75], MAT.concrete);
+  }
+
+  /** Under a roof: strip lights on the ceiling. On top: a raised edge and felt. */
+  private roofDetail(b: Float32Array, o: number): void {
+    const [x0, y0, z0, x1, y1, z1] = b.subarray(o, o + 6);
+    const TUBE: RGB = [0.95, 0.97, 1];
+    for (let x = x0 + 4; x < x1 - 2; x += 7) {
+      for (let z = z0 + 4; z < z1 - 2; z += 7) {
+        if (this.solidAt(x, z)) continue;
+        this.world.box(x, y0 - 0.05, z, 1.5, 0.1, 0.24, [0.7, 0.7, 0.7], MAT.gunmetal);
+        this.worldGlow.box(x, y0 - 0.11, z, 1.3, 0.04, 0.12, TUBE, -1, 7, FLAG_NOSHADOW);
+        this.staticLights.push({ pos: [x, y0 - 0.4, z], radius: 9, color: TUBE, intensity: 7, flicker: (Math.floor(x) + Math.floor(z)) % 7 === 0 ? x : undefined });
+      }
+    }
+    const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, w = x1 - x0, d = z1 - z0;
+    this.world.box(cx, y1 + 0.01, cz, w - 0.3, 0.02, d - 0.3, [0.35, 0.35, 0.37], MAT.floor);
+    for (const [px, pz, sx, sz] of [[cx, z0 + 0.15, w, 0.3], [cx, z1 - 0.15, w, 0.3], [x0 + 0.15, cz, 0.3, d], [x1 - 0.15, cz, 0.3, d]]) this.world.box(px, y1 + 0.15, pz, sx, 0.3, sz, [0.75, 0.75, 0.75], MAT.concrete);
+  }
+
+  /** Frames, sills and lintels around window and door openings. */
+  private openingDetail(b: Float32Array, o: number): void {
+    const [x0, y0, z0, x1, y1, z1] = b.subarray(o, o + 6);
+    const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+    const FRAME: RGB = [0.85, 0.85, 0.82];
+    if (y0 === 0) {
+      // Window sill on top of the low wall.
+      this.world.box(cx, y1 + 0.04, cz, x1 - x0 + 0.16, 0.08, z1 - z0 + 0.16, FRAME, MAT.concrete);
+    } else {
+      // Lintel under the wall above the opening, and jambs down to the sill or the floor.
+      this.world.box(cx, y0 - 0.06, cz, x1 - x0 + 0.1, 0.12, z1 - z0 + 0.1, FRAME, MAT.concrete);
+      const bottom = y0 < 2.35 ? 1.0 : 0;
+      // The opening runs through the wall along whichever axis has open floor on both sides.
+      const floorBlocked = (x: number, z: number) => {
+        for (let q = 0; q < this.session.boxes.length; q += 8) { const k = this.session.boxes; if (!(k[q + 7] & 2) && k[q + 1] < 1.5 && k[q + 4] > 0.2 && x > k[q] && x < k[q + 3] && z > k[q + 2] && z < k[q + 5]) return true; }
+        return false;
+      };
+      const alongX = !floorBlocked(cx, z0 - 0.5) && !floorBlocked(cx, z1 + 0.5);
+      for (const side of [-1, 1]) {
+        const jx = alongX ? cx + side * 0.95 : cx, jz = alongX ? cz : cz + side * 0.95;
+        this.world.box(jx, (y0 + bottom) / 2, jz, alongX ? 0.1 : x1 - x0 + 0.06, y0 - bottom, alongX ? z1 - z0 + 0.06 : 0.1, [0.3, 0.33, 0.36], MAT.painted);
+      }
+    }
   }
 
   /** Crate stacks get dark steel corner straps. */

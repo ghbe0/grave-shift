@@ -518,7 +518,7 @@ mod tests {
 
     #[test]
     fn spawns_spread_over_the_map_and_teams_start_on_their_own_side() {
-        for map in 0..2 {
+        for map in 0..crate::maps::MAPS.len() {
             let mut g = match_of(MODE_TDM, map, &[(1, 0), (2, 1), (3, 0), (4, 1)]);
             assert!(g.obj.spots.len() > 40, "map {map}: {} spots", g.obj.spots.len());
             let (w, d) = g.map.size;
