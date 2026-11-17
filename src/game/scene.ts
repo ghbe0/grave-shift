@@ -6,6 +6,7 @@ import { loadModel, type Model } from '../gfx/loader';
 import { compose, invert, lookAt, mat4, mul, ortho, perspective, transformPoint } from '../gfx/mat';
 import { cubeMesh, cylinderMesh, FLAG_NOSHADOW, FLAG_VIEWMODEL, LIGHT_FLOATS, MAT, MAX_LIGHTS, sphereMesh, type Draw, type Frame, type Renderer } from '../gfx/renderer';
 import { Batch, type V3 } from './batch';
+import { bodyParts } from '../gfx/anatomy';
 import { BOOTS, CAMOS, FATIGUES, GLOVES, HELMETS, SKINS, VESTS, type Look } from './look';
 import { Scenery, SCENERY_MATS } from './scenery';
 import { MODES, TEAM_COLORS } from './rules';
@@ -92,6 +93,8 @@ export class Scene {
   private staticLights: LightSrc[] = [];
   /** Per-zombie animation state, and the bodies of the recently killed. */
   private zanim = new Map<number, { phase: number; yaw: number; speed: number; attack: number; flinch: number; x: number; z: number; hp: number; kind: number; seen: number }>();
+  /** Sculpted body-part meshes, each with a batch for the world and one for the first-person view. */
+  private parts: Record<string, { mesh: number; batch: Batch; vm: Batch }> = {};
   private panim = new Map<number, { phase: number; x: number; z: number; speed: number; crouch: number; reload: number; swap: number; lean: number; seen: number }>();
   private corpses: { id: number; x: number; y: number; z: number; yaw: number; kind: number; t: number; rec: Float32Array }[] = [];
   private switchAt: { x: number; z: number; nx: number; nz: number } | null = null;
@@ -111,6 +114,7 @@ export class Scene {
     this.cube = renderer.createMesh(cubeMesh());
     this.sphere = renderer.createMesh(sphereMesh());
     this.cylinder = renderer.createMesh(cylinderMesh());
+    for (const [name, data] of Object.entries(bodyParts())) this.parts[name] = { mesh: renderer.createMesh(data), batch: new Batch(), vm: new Batch() };
     const b = session.boxes;
     for (let o = 0; o < b.length; o += 8) {
       const flags = b[o + 7] & 0xff;
@@ -245,6 +249,17 @@ export class Scene {
     face(0, 1.2, 0.36, 0.34, 0.12, 0.08, [0.3, 0.3, 0.32], MAT.gunmetal);
     this.worldRound.box(x - n[0] * 0.2, 3.0, z - n[1] * 0.2, 0.09, 2.2, 0.09, [0.8, 0.8, 0.8], MAT.gunmetal);
     this.worldRound.box(x + n[0] * 0.1, 2.6, z + n[1] * 0.1, 0.06, 1.4, 0.06, [0.7, 0.7, 0.7], MAT.gunmetal);
+  }
+
+  /** A sculpted part stretched between two joints (`r` half-width, `rz` half-depth). */
+  private seg(kind: string, a: V3, b: V3, r: number, c: ArrayLike<number>, layer: number, rz = r, side?: V3, flags = 0): void {
+    const part = this.parts[kind];
+    (flags & FLAG_VIEWMODEL ? part.vm : part.batch).limb(a, b, r, c, layer, flags, rz, side, 0.35);
+  }
+  /** A sculpted part placed like a box (centre, size, yaw/pitch/roll). */
+  private put(kind: string, x: number, y: number, z: number, sx: number, sy: number, sz: number, c: ArrayLike<number>, layer = -1, emissive = 0, flags = 0, yaw = 0, pitch = 0, roll = 0, metallic = 0, roughness = 1): void {
+    const part = this.parts[kind];
+    (flags & FLAG_VIEWMODEL ? part.vm : part.batch).box(x, y, z, sx, sy, sz, c, layer, emissive, flags, yaw, pitch, roll, metallic, roughness);
   }
 
   /** Which way a free-standing object should face: toward open floor. */
@@ -518,7 +533,7 @@ export class Scene {
 
     const hip = 0.93 + bob - a.attack * 0.03;
     const chestL: [number, number, number] = [sway * 0.5, hip + Math.cos(lean) * 0.5, Math.sin(lean) * 0.5];
-    const pelvis = at(0, hip, 0), chest = at(...chestL);
+    void chestL;
     const nod = Math.sin(t * 1.1 + z.id) * 0.03 * live;
     const headL: [number, number, number] = [chestL[0] + (limp ? limp * 0.03 : 0) + nod, chestL[1] + 0.25, chestL[2] + 0.1 + lean * 0.14];
     const headP = at(...headL);
@@ -530,19 +545,18 @@ export class Scene {
       const swing = Math.sin(sp) * amp * lame * live;
       const bend = (Math.max(0, -Math.cos(sp)) * amp * 1.5 * lame + 0.1) * live + fall * 0.5 * (side > 0 ? 1 : 0.3);
       const [knee, ankle] = chain(at, [side * 0.1, hip - 0.04, 0], 0.46, 0.44, swing, bend);
-      out.limb(at(side * 0.1, hip, 0), knee, 0.082, trouser, MAT.fabric, 0, 0.09, right);
-      out.limb(knee, ankle, 0.058, trouser, MAT.fabric, 0, 0.062, right);
+      this.seg('thigh', at(side * 0.1, hip, 0), knee, 0.085, trouser, MAT.fabric, 0.09, right);
+      this.seg('shin', knee, ankle, 0.062, trouser, MAT.fabric, 0.066, right);
       // Foot: a shoe pointing the way it walks, kept above the ground.
       const fwd = base.fwd;
       const sole = Math.max(ankle[1] - 0.04, z.y + rise + 0.04);
-      out.limb([ankle[0] - fwd[0] * 0.03, sole, ankle[2] - fwd[2] * 0.03], [ankle[0] + fwd[0] * 0.17 * cf, sole + sf * 0.12, ankle[2] + fwd[2] * 0.17 * cf], 0.045, [0.5, 0.45, 0.4], MAT.polymer, 0, 0.055);
+      this.seg('boot', [ankle[0] - fwd[0] * 0.06, sole, ankle[2] - fwd[2] * 0.06], [ankle[0] + fwd[0] * 0.19 * cf, sole + sf * 0.12, ankle[2] + fwd[2] * 0.19 * cf], 0.055, [0.45, 0.38, 0.32], MAT.fabric, 0.06, right);
     }
     const jawDropEarly = (0.035 + a.attack * 0.04) * live;
     // Torso: pelvis, a hunched rib cage wider at the shoulders, and the belly between.
-    out.limb(pelvis, chest, 0.15, rag, MAT.fabric, 0, 0.115, right);
+    this.seg('torsoGaunt', at(0, hip - 0.1, 0), at(chestL[0], chestL[1] + 0.12, chestL[2] + 0.03), 0.2, rag, MAT.fabric, 0.14, right);
     const ribs = at(chestL[0], chestL[1] - 0.09, chestL[2] - 0.01);
-    out.limb(at(chestL[0] - 0.13, chestL[1] - 0.08, chestL[2]), at(chestL[0] + 0.13, chestL[1] - 0.08, chestL[2]), 0.15, rag, MAT.fabric, 0, 0.12);
-    out.limb(at(0, hip - 0.02, 0), at(0, hip + 0.12, 0.03), 0.14, trouser, MAT.fabric, 0, 0.105, right);
+    this.seg('torsoGaunt', at(0, hip - 0.1, 0), at(0, hip + 0.16, 0.02), 0.19, trouser, MAT.fabric, 0.14, right);
     // Torn shirt: bare, wounded skin showing through on one side.
     const wound = at(chestL[0] + (hsh(10) - 0.5) * 0.2, chestL[1] - 0.16 - hsh(11) * 0.1, chestL[2] + 0.1);
     out.limb(wound, [wound[0] + right[0] * 0.07, wound[1] - 0.06, wound[2] + right[2] * 0.07], 0.05, gore, MAT.skin, 0, 0.03);
@@ -557,32 +571,32 @@ export class Scene {
     // Bare, grey shin where one trouser leg has gone, and stains down the front.
     const tornSide = hsh(32) < 0.5 ? -1 : 1;
     const [tk, ta] = chain(at, [tornSide * 0.1, hip - 0.04, 0], 0.46, 0.44, Math.sin(ph + (tornSide > 0 ? Math.PI : 0)) * amp * (limp === tornSide ? 0.45 : 1) * live, (Math.max(0, -Math.cos(ph + (tornSide > 0 ? Math.PI : 0))) * amp * 1.5 * (limp === tornSide ? 0.45 : 1) + 0.1) * live + fall * 0.5 * (tornSide > 0 ? 1 : 0.3));
-    out.limb([(tk[0] + ta[0]) / 2, (tk[1] + ta[1]) / 2, (tk[2] + ta[2]) / 2], ta, 0.06, skinTint, MAT.skin, 0, 0.064);
+    this.seg('shin', [(tk[0] + ta[0]) / 2, (tk[1] + ta[1]) / 2, (tk[2] + ta[2]) / 2], ta, 0.062, skinTint, MAT.skin, 0.066, right);
     const stain = at(chestL[0] + (hsh(33) - 0.5) * 0.12, chestL[1] - 0.02, chestL[2] + 0.115);
-    out.box(stain[0], stain[1], stain[2], 0.16, 0.2, 0.05, [0.28, 0.04, 0.03], MAT.fabric, 0, 0, a.yaw, -lean);
+    this.put('gear', stain[0], stain[1], stain[2], 0.16, 0.2, 0.04, [0.28, 0.04, 0.03], MAT.fabric, 0, 0, a.yaw, -lean);
     const chin = at(headL[0], headL[1] - 0.07 - jawDropEarly, headL[2] + 0.09);
-    out.box(chin[0], chin[1], chin[2], 0.08, 0.05, 0.05, gore, MAT.skin, 0, 0, a.yaw);
+    this.put('gear', chin[0], chin[1], chin[2], 0.07, 0.04, 0.04, gore, MAT.skin, 0, 0, a.yaw);
     // Neck and head: skull, brow, sunken cheeks, a slack jaw that works as it moans.
-    out.limb(chest, headP, 0.05, skinTint, MAT.skin);
+    this.seg('neck', at(chestL[0], chestL[1] + 0.08, chestL[2] + 0.02), headP, 0.05, skinTint, MAT.skin, 0.05, right);
     const tilt = (limp * 0.25 + Math.sin(t * 0.8 + z.id) * 0.08) * live;
     const skull = at(headL[0], headL[1] + 0.06, headL[2] + 0.01);
-    out.box(skull[0], skull[1], skull[2], 0.2 * broad ** 0.3, 0.235 * tall, 0.225, skinTint, MAT.skin, 0, 0, a.yaw, -lean * 0.45 + fa, tilt);
+    this.put('headDead', skull[0], skull[1], skull[2], 0.2 * broad ** 0.3, 0.25 * tall, 0.235, skinTint, MAT.skin, 0, 0, a.yaw, -lean * 0.45 + fa, tilt);
     const jawDrop = (0.035 + Math.abs(Math.sin(t * 2.1 + z.id)) * 0.035 + a.attack * 0.04) * live + fall * 0.05;
     const jp = at(headL[0], headL[1] - 0.045 - jawDrop, headL[2] + 0.075);
-    out.box(jp[0], jp[1], jp[2], 0.125, 0.05, 0.11, skinTint, MAT.skin, 0, 0, a.yaw, 0.35 + fa, tilt);
+    this.put('gear', jp[0], jp[1], jp[2], 0.11, 0.045, 0.1, skinTint, MAT.skin, 0, 0, a.yaw, 0.35 + fa, tilt);
     const mouth = at(headL[0], headL[1] - 0.02 - jawDrop * 0.5, headL[2] + 0.1);
     out.box(mouth[0], mouth[1], mouth[2], 0.09, 0.02 + jawDrop, 0.03, [0.12, 0.02, 0.02], MAT.skin, 0, 0, a.yaw, fa, tilt);
     if (hsh(12) < 0.6) {
       // Matted hair.
       const hair = at(headL[0], headL[1] + 0.15, headL[2] - 0.04);
-      out.box(hair[0], hair[1], hair[2], 0.19, 0.09, 0.2, [0.25, 0.22, 0.2], MAT.fabric, 0, 0, a.yaw, -lean * 0.45 + fa, tilt);
+      this.put('helmet', hair[0], hair[1] - 0.03, hair[2], 0.215, 0.17, 0.235, [0.25, 0.22, 0.2], MAT.fabric, 0, 0, a.yaw, -lean * 0.45 + fa, tilt);
     }
     // Arms: shamblers grope ahead, runners pump, an attack lunges and claws. A missing arm is a stump.
     for (const side of [-1, 1]) {
       const sh = at(chestL[0] + side * 0.21, chestL[1] - 0.04, chestL[2]);
       if (oneArm === side) {
         const stump = at(chestL[0] + side * 0.27, chestL[1] - 0.2, chestL[2] + 0.02);
-        out.limb(sh, stump, 0.055, rag, MAT.fabric, 0, 0.055);
+        this.seg('upperArm', sh, stump, 0.055, rag, MAT.fabric, 0.055, right);
         out.limb(stump, [stump[0], stump[1] - 0.04, stump[2]], 0.045, gore, MAT.skin, 0, 0.045);
         continue;
       }
@@ -592,8 +606,10 @@ export class Scene {
       const raise = (grope * (1 - a.attack) + claw * a.attack) * live - fall * 0.3;
       const el = at(chestL[0] + side * (0.27 + fall * 0.12), chestL[1] - 0.3 + raise * 0.24, chestL[2] + 0.1 + raise * 0.15);
       const hand = at(chestL[0] + side * (0.2 + fall * 0.25), chestL[1] - 0.34 + raise * 0.47, chestL[2] + 0.36 * live + raise * 0.13 + a.attack * 0.12);
-      out.limb(sh, el, 0.052, hsh(13 + side) < 0.5 ? rag : skinTint, hsh(13 + side) < 0.5 ? MAT.fabric : MAT.skin, 0, 0.052);
-      out.limb(el, hand, 0.04, skinTint, MAT.skin, 0, 0.038);
+      this.seg('upperArm', sh, el, 0.055, hsh(13 + side) < 0.5 ? rag : skinTint, hsh(13 + side) < 0.5 ? MAT.fabric : MAT.skin, 0.053, right);
+      this.seg('forearm', el, hand, 0.045, skinTint, MAT.skin, 0.04, right);
+      const hd = [hand[0] - el[0], hand[1] - el[1], hand[2] - el[2]], hl = Math.hypot(hd[0], hd[1], hd[2]) || 1;
+      this.seg('hand', hand, [hand[0] + (hd[0] / hl) * 0.12, hand[1] + (hd[1] / hl) * 0.12, hand[2] + (hd[2] / hl) * 0.12], 0.045, skinTint, MAT.skin, 0.025, right);
       // Hand: a palm and three hooked fingers.
       const fwd = base.fwd;
       const curl = 0.3 + a.attack * 0.5;
@@ -621,7 +637,6 @@ export class Scene {
   private survivor(out: Batch, glow: Batch, groups: Map<string, { mesh: number; shadow: boolean; batch: Batch }>, p: { id: number; x: number; y: number; z: number; yaw: number; rec: Float32Array }, t: number, dt = 0): void {
     const { P } = this.sim.L;
     const look = this.lookOf(p.id);
-    const hard = this.casters; // flat-sided parts (plates, pouches, soles)
     // In team modes the vest always shows the side, so friend and foe are easy to tell apart.
     const sideTint = MODES[this.session.start.mode]?.teams ? TEAM_COLORS[p.rec[P.team]] : undefined;
     const vest: RGB = sideTint ?? (look.vest ? VESTS[look.vest - 1].rgb : [0.3, 0.34, 0.26]);
@@ -656,11 +671,11 @@ export class Scene {
     const at = (lx: number, ly: number, lz: number): V3 => base.at(lx * bulk, ly, lz);
     if (life === 1) {
       // Downed: on one side, an arm up for help.
-      out.limb(at(0, 0.2, -0.55), at(0, 0.24, 0.1), 0.17, fatigues, MAT.fabric, 0, 0.12);
-      out.limb(at(0, 0.2, -0.55), at(0.12, 0.14, -1.0), 0.09, fatigues, MAT.fabric);
-      out.limb(at(0.12, 0.14, -1.0), at(0.1, 0.1, -1.4), 0.07, fatigues, MAT.fabric);
-      hard.box(...at(0, 0.27, 0.02), 0.44, 0.2, 0.4, vest, MAT.fabric, 0, 0, p.yaw);
-      out.box(...at(0, 0.3, 0.45), 0.2, 0.22, 0.24, skin, MAT.skin, 0, 0, p.yaw);
+      this.seg('torso', at(0, 0.2, -0.55), at(0, 0.24, 0.2), 0.2, fatigues, MAT.fabric, 0.14);
+      this.seg('thigh', at(0, 0.2, -0.55), at(0.12, 0.14, -1.0), 0.1, fatigues, MAT.fabric, 0.1);
+      this.seg('shin', at(0.12, 0.14, -1.0), at(0.1, 0.1, -1.4), 0.07, fatigues, MAT.fabric, 0.07);
+      this.put('gear', ...at(0, 0.27, 0.02), 0.44, 0.2, 0.4, vest, MAT.fabric, 0, 0, p.yaw);
+      this.put('head', ...at(0, 0.3, 0.45), 0.2, 0.25, 0.23, skin, MAT.skin, 0, 0, p.yaw, Math.PI / 2);
       const wave = Math.sin(t * 5) * 0.12;
       out.limb(at(0.2, 0.3, 0.2), at(0.3 + wave, 0.7, 0.3), 0.05, fatigues, MAT.fabric);
       glow.box(p.x, 1.4 + Math.sin(t * 4) * 0.1, p.z, 0.2, 0.2, 0.2, [0.3, 0.6, 1], -1, 4, FLAG_NOSHADOW, t * 2, 0.6);
@@ -678,17 +693,17 @@ export class Scene {
         ? [at(sd * 0.12, 0.35, 0.35 + (sd > 0 ? 0.25 : 0)), at(sd * 0.12, 0.1, 0.75 + (sd > 0 ? 0.2 : 0))]
         : chain(at, [sd * 0.105, hip - 0.04, 0], 0.46, 0.45, Math.sin(sp) * amp + a.crouch * 0.85, Math.max(0, -Math.cos(sp)) * amp * 1.5 + a.crouch * 1.7 + 0.06);
       const hipJ = at(sd * 0.105, hip, 0);
-      out.limb(hipJ, knee, 0.095 * bulk, fatigues, MAT.fabric, 0, 0.1 * bulk, right);
-      out.limb(knee, ankle, 0.066, fatigues, MAT.fabric, 0, 0.072, right);
+      this.seg('thigh', hipJ, knee, 0.1 * bulk, fatigues, MAT.fabric, 0.105 * bulk, right);
+      this.seg('shin', knee, ankle, 0.07, fatigues, MAT.fabric, 0.074, right);
       // Cargo pocket on the thigh.
       const pk: V3 = [(hipJ[0] + knee[0]) / 2 + right[0] * sd * 0.1, (hipJ[1] + knee[1]) / 2, (hipJ[2] + knee[2]) / 2 + right[2] * sd * 0.1];
-      hard.box(pk[0], pk[1], pk[2], 0.05, 0.16, 0.13, fatigues, MAT.fabric, 0, 0, p.yaw);
-      if (look.pads > 0) out.box(knee[0] + fwd[0] * 0.05, knee[1], knee[2] + fwd[2] * 0.05, 0.12, 0.14, 0.1, [0.5, 0.5, 0.5], MAT.polymer, 0, 0, p.yaw);
+      this.put('gear', pk[0], pk[1], pk[2], 0.05, 0.16, 0.13, fatigues, MAT.fabric, 0, 0, p.yaw);
+      if (look.pads > 0) this.put('gear', knee[0] + fwd[0] * 0.055, knee[1], knee[2] + fwd[2] * 0.055, 0.12, 0.15, 0.07, [0.5, 0.5, 0.5], MAT.polymer, 0, 0, p.yaw);
       // Boot: ankle, toe and a dark sole.
       const sole = Math.max(ankle[1] - 0.05, p.y + 0.045);
-      out.limb([ankle[0], ankle[1] + 0.02, ankle[2]], [ankle[0], sole + 0.03, ankle[2]], 0.058, boot, MAT.fabric, 0, 0.065);
-      out.limb([ankle[0] - fwd[0] * 0.02, sole + 0.012, ankle[2] - fwd[2] * 0.02], [ankle[0] + fwd[0] * 0.16, sole + 0.005, ankle[2] + fwd[2] * 0.16], 0.047, boot, MAT.fabric, 0, 0.056);
-      hard.box(ankle[0] + fwd[0] * 0.065, sole - 0.03, ankle[2] + fwd[2] * 0.065, 0.1, 0.03, 0.29, [0.25, 0.25, 0.25], MAT.polymer, 0, 0, p.yaw);
+      this.seg('shin', [ankle[0], ankle[1] + 0.06, ankle[2]], [ankle[0], sole + 0.04, ankle[2]], 0.062, boot, MAT.fabric, 0.066, right);
+      this.seg('boot', [ankle[0] - fwd[0] * 0.07, sole + 0.02, ankle[2] - fwd[2] * 0.07], [ankle[0] + fwd[0] * 0.19, sole + 0.02, ankle[2] + fwd[2] * 0.19], 0.058, boot, MAT.fabric, 0.07, right);
+      this.put('gear', ankle[0] + fwd[0] * 0.065, sole - 0.03, ankle[2] + fwd[2] * 0.065, 0.1, 0.03, 0.29, [0.25, 0.25, 0.25], MAT.polymer, 0, 0, p.yaw);
     }
     // Spine: leans into a run and bends with the aim.
     const bend = a.lean * 0.22 + a.crouch * 0.2 - pitch * 0.25;
@@ -697,47 +712,44 @@ export class Scene {
     const pelvis = at(0, hip, 0);
     const waist = at(sway * 0.3, ...up(0.2).slice(1) as [number, number]);
     const chestL = up(0.48, 0.02);
-    const chest = at(sway, chestL[1], chestL[2]);
-    out.limb(at(-0.07, hip - 0.02, 0), at(0.07, hip - 0.02, 0), 0.125 * bulk, fatigues, MAT.fabric, 0, 0.11); // hips
-    out.limb(pelvis, waist, 0.15 * bulk, fatigues, MAT.fabric, 0, 0.115 * bulk, right);
-    out.limb(waist, chest, 0.17 * bulk, fatigues, MAT.fabric, 0, 0.125 * bulk, right);
-    out.limb(at(-0.15, chestL[1] + 0.02, chestL[2]), at(0.15, chestL[1] + 0.02, chestL[2]), 0.1 * bulk, fatigues, MAT.fabric, 0, 0.1); // shoulders
+    void chestL;
+    // One sculpted torso from the hips to the base of the neck, leaning with the spine.
+    this.seg('torso', at(0, hip - 0.1, 0), at(sway, chestL[1] + 0.13, chestL[2] + 0.01), 0.205 * bulk, fatigues, MAT.fabric, 0.14 * bulk, right);
+    void pelvis; void waist;
     // Belt, holster and pouches.
-    hard.box(...at(0, hip + 0.06, 0), 0.36 * bulk, 0.055, 0.27, [0.35, 0.33, 0.3], MAT.fabric, 0, 0, p.yaw);
-    hard.box(...at(0.2, hip - 0.06, 0.02), 0.06, 0.2, 0.11, [0.2, 0.2, 0.2], MAT.polymer, 0, 0, p.yaw);
-    hard.box(...at(-0.2, hip + 0.02, 0.0), 0.07, 0.12, 0.12, web, MAT.fabric, 0, 0, p.yaw);
+    this.put('gear', ...at(0, hip + 0.06, 0), 0.36 * bulk, 0.055, 0.27, [0.35, 0.33, 0.3], MAT.fabric, 0, 0, p.yaw);
+    this.put('gear', ...at(0.2, hip - 0.06, 0.02), 0.06, 0.2, 0.11, [0.2, 0.2, 0.2], MAT.polymer, 0, 0, p.yaw);
+    this.put('gear', ...at(-0.2, hip + 0.02, 0.0), 0.07, 0.12, 0.12, web, MAT.fabric, 0, 0, p.yaw);
     // Plate carrier: front and back plates, cummerbund, shoulder straps, three magazine pouches, a radio.
-    const plate = (lz: number, th: number) => hard.box(...at(sway * 0.8, chestL[1] - 0.1, chestL[2] + lz), 0.33 * bulk, 0.36, th, vest, MAT.fabric, 0, 0, p.yaw, -bend);
+    const plate = (lz: number, th: number) => this.put('gear', ...at(sway * 0.8, chestL[1] - 0.1, chestL[2] + lz), 0.33 * bulk, 0.36, th, vest, MAT.fabric, 0, 0, p.yaw, -bend);
     plate(0.125, 0.07); plate(-0.125, 0.07);
-    hard.box(...at(sway * 0.6, chestL[1] - 0.2, chestL[2]), 0.41 * bulk, 0.15, 0.3, web, MAT.fabric, 0, 0, p.yaw, -bend);
-    for (const sx of [-0.11, 0.11]) hard.box(...at(sx, chestL[1] + 0.1, chestL[2]), 0.06, 0.05, 0.3, web, MAT.fabric, 0, 0, p.yaw, -bend);
+    this.put('gear', ...at(sway * 0.6, chestL[1] - 0.2, chestL[2]), 0.41 * bulk, 0.15, 0.3, web, MAT.fabric, 0, 0, p.yaw, -bend);
+    for (const sx of [-0.11, 0.11]) this.put('gear', ...at(sx, chestL[1] + 0.1, chestL[2]), 0.06, 0.05, 0.3, web, MAT.fabric, 0, 0, p.yaw, -bend);
     for (const lx of [-0.11, 0, 0.11]) {
-      hard.box(...at(lx + sway * 0.7, chestL[1] - 0.2, chestL[2] + 0.185), 0.085, 0.16, 0.06, web, MAT.fabric, 0, 0, p.yaw, -bend);
-      hard.box(...at(lx + sway * 0.7, chestL[1] - 0.105, chestL[2] + 0.185), 0.06, 0.04, 0.035, [0.15, 0.15, 0.15], MAT.polymer, 0, 0, p.yaw, -bend);
+      this.put('gear', ...at(lx + sway * 0.7, chestL[1] - 0.2, chestL[2] + 0.185), 0.085, 0.16, 0.06, web, MAT.fabric, 0, 0, p.yaw, -bend);
+      this.put('gear', ...at(lx + sway * 0.7, chestL[1] - 0.105, chestL[2] + 0.185), 0.06, 0.04, 0.035, [0.15, 0.15, 0.15], MAT.polymer, 0, 0, p.yaw, -bend);
     }
-    hard.box(...at(-0.15, chestL[1] + 0.02, chestL[2] + 0.15), 0.06, 0.13, 0.045, [0.12, 0.12, 0.12], MAT.polymer, 0, 0, p.yaw, -bend);
+    this.put('gear', ...at(-0.15, chestL[1] + 0.02, chestL[2] + 0.15), 0.06, 0.13, 0.045, [0.12, 0.12, 0.12], MAT.polymer, 0, 0, p.yaw, -bend);
     out.box(...at(-0.15, chestL[1] + 0.14, chestL[2] + 0.15), 0.012, 0.16, 0.012, [0.1, 0.1, 0.1], MAT.polymer); // aerial
     // Pack.
     if (look.pack > 0) {
       const size = [0, 0.34, 0.3, 0.2, 0.46][look.pack] ?? 0.3, depth = [0, 0.16, 0.14, 0.07, 0.22][look.pack] ?? 0.15;
       const packTint: RGB = look.pack === 2 ? [0.2, 0.22, 0.2] : web;
-      hard.box(...at(0, chestL[1] - 0.12 - (look.pack === 4 ? 0.06 : 0), chestL[2] - 0.17 - depth / 2), 0.3 * bulk, size, depth, packTint, look.pack === 2 ? MAT.polymer : MAT.fabric, 0, 0, p.yaw, -bend);
+      this.put('gear', ...at(0, chestL[1] - 0.12 - (look.pack === 4 ? 0.06 : 0), chestL[2] - 0.17 - depth / 2), 0.3 * bulk, size, depth, packTint, look.pack === 2 ? MAT.polymer : MAT.fabric, 0, 0, p.yaw, -bend);
       if (look.pack === 2) out.box(...at(0.1, chestL[1] + 0.35, chestL[2] - 0.22), 0.014, 0.6, 0.014, [0.1, 0.1, 0.1], MAT.polymer);
-      if (look.pack === 4) hard.box(...at(0, chestL[1] + 0.12, chestL[2] - 0.26), 0.34 * bulk, 0.14, 0.2, fatigues, MAT.fabric, 0, 0, p.yaw, -bend);
+      if (look.pack === 4) this.put('gear', ...at(0, chestL[1] + 0.12, chestL[2] - 0.26), 0.34 * bulk, 0.14, 0.2, fatigues, MAT.fabric, 0, 0, p.yaw, -bend);
     }
     // Neck and head (the head turns with the aim).
     const hp = pitch * 0.55;
     const neck = at(sway, chestL[1] + 0.13, chestL[2] + 0.02);
     const headL: [number, number, number] = [sway, chestL[1] + 0.27, chestL[2] + 0.04 + Math.sin(-hp) * 0.02];
     const head = at(...headL);
-    out.limb(chest, neck, 0.055, skin, MAT.skin);
+    this.seg('neck', neck, at(headL[0], headL[1] - 0.09, headL[2] - 0.01), 0.055, skin, MAT.skin, 0.055, right);
     const masked = look.face === 3;
     const faceTint: RGB = masked ? [0.35, 0.35, 0.36] : skin;
-    out.box(head[0], head[1], head[2], 0.19, 0.24, 0.215, faceTint, masked ? MAT.fabric : MAT.skin, 0, 0, p.yaw, hp);
+    this.put('head', head[0], head[1], head[2], 0.205, 0.255, 0.235, faceTint, masked ? MAT.fabric : MAT.skin, 0, 0, p.yaw, hp);
     const onHead = (lx: number, ly: number, lz: number): V3 => at(headL[0] + lx / bulk, headL[1] + ly * Math.cos(hp) + lz * Math.sin(hp), headL[2] + lz * Math.cos(hp) - ly * Math.sin(hp));
     if (!masked) {
-      out.box(...onHead(0, -0.02, 0.105), 0.035, 0.05, 0.04, skin, MAT.skin, 0, 0, p.yaw, hp); // nose
-      for (const ex of [-0.1, 0.1]) out.box(...onHead(ex, 0, 0), 0.03, 0.06, 0.04, skin, MAT.skin, 0, 0, p.yaw, hp); // ears
       for (const ex of [-0.04, 0.04]) out.box(...onHead(ex, 0.025, 0.098), 0.028, 0.014, 0.012, [0.08, 0.06, 0.05], MAT.skin, 0, 0, p.yaw, hp); // eyes
     }
     const hairTint: RGB = [0.16, 0.12, 0.09];
@@ -753,29 +765,28 @@ export class Scene {
     const hg = look.headgear;
     if (hg === 0 || hg === 5) {
       const high = hg === 5;
-      out.box(...onHead(0, 0.085, -0.005), 0.25, high ? 0.17 : 0.19, 0.27, helm, MAT.painted, 0, 0, p.yaw, hp);
-      if (!high) for (const ex of [-0.105, 0.105]) out.box(...onHead(ex, 0.0, -0.01), 0.04, 0.12, 0.16, helm, MAT.painted, 0, 0, p.yaw, hp); // ear cover
-      hard.box(...onHead(0, 0.1, 0.13), 0.06, 0.05, 0.02, [0.15, 0.15, 0.15], MAT.polymer, 0, 0, p.yaw, hp); // mount
-      for (const ex of [-0.127, 0.127]) hard.box(...onHead(ex, 0.07, 0), 0.012, 0.03, 0.14, [0.15, 0.15, 0.15], MAT.polymer, 0, 0, p.yaw, hp); // rails
+      this.put('helmet', ...onHead(0, high ? 0.075 : 0.055, -0.005), 0.265, high ? 0.22 : 0.27, 0.285, helm, MAT.painted, 0, 0, p.yaw, hp);
+      this.put('gear', ...onHead(0, 0.1, 0.13), 0.06, 0.05, 0.02, [0.15, 0.15, 0.15], MAT.polymer, 0, 0, p.yaw, hp); // mount
+      for (const ex of [-0.127, 0.127]) this.put('gear', ...onHead(ex, 0.07, 0), 0.012, 0.03, 0.14, [0.15, 0.15, 0.15], MAT.polymer, 0, 0, p.yaw, hp); // rails
       out.box(...onHead(0, -0.1, 0.03), 0.17, 0.02, 0.1, [0.2, 0.2, 0.2], MAT.fabric, 0, 0, p.yaw, hp); // chin strap
       if (high) { for (const ex of [-0.115, 0.115]) out.box(...onHead(ex, 0, 0), 0.05, 0.1, 0.09, [0.2, 0.22, 0.2], MAT.polymer, 0, 0, p.yaw, hp); out.limb(onHead(-0.115, -0.02, 0.03), onHead(-0.05, -0.06, 0.11), 0.008, [0.1, 0.1, 0.1], MAT.polymer); }
     } else if (hg === 1) {
-      out.box(...onHead(0, 0.1, 0), 0.215, 0.1, 0.235, fatigues, MAT.fabric, 0, 0, p.yaw, hp);
-      hard.box(...onHead(0, 0.075, 0.15), 0.17, 0.014, 0.1, fatigues, MAT.fabric, 0, 0, p.yaw, hp - 0.15);
+      this.put('helmet', ...onHead(0, 0.06, 0), 0.22, 0.19, 0.24, fatigues, MAT.fabric, 0, 0, p.yaw, hp);
+      this.put('gear', ...onHead(0, 0.075, 0.15), 0.17, 0.014, 0.1, fatigues, MAT.fabric, 0, 0, p.yaw, hp - 0.15);
     } else if (hg === 2) {
-      out.box(...onHead(0, 0.085, -0.005), 0.215, 0.17, 0.235, web, MAT.fabric, 0, 0, p.yaw, hp);
+      this.put('helmet', ...onHead(0, 0.065, -0.005), 0.22, 0.24, 0.24, web, MAT.fabric, 0, 0, p.yaw, hp);
     } else if (hg === 3) {
-      out.box(...onHead(0, 0.03, -0.03), 0.27, 0.31, 0.28, fatigues, MAT.fabric, 0, 0, p.yaw, hp);
+      this.put('helmet', ...onHead(0, 0.0, -0.03), 0.28, 0.36, 0.29, fatigues, MAT.fabric, 0, 0, p.yaw, hp);
     } else if (hg === 4) {
-      out.box(...onHead(0, 0.1, -0.02), 0.2, 0.09, 0.22, hairTint, MAT.fabric, 0, 0, p.yaw, hp); // short hair
+      this.put('helmet', ...onHead(0, 0.065, -0.012), 0.212, 0.19, 0.24, hairTint, MAT.fabric, 0, 0, p.yaw, hp); // short hair
     } else if (hg === 6) {
-      out.box(...onHead(0, 0.11, 0), 0.21, 0.09, 0.225, fatigues, MAT.fabric, 0, 0, p.yaw, hp);
+      this.put('helmet', ...onHead(0, 0.07, 0), 0.22, 0.2, 0.235, fatigues, MAT.fabric, 0, 0, p.yaw, hp);
       out.box(...onHead(0, 0.075, 0), 0.4, 0.016, 0.42, fatigues, MAT.fabric, 0, 0, p.yaw, hp); // brim
     } else if (hg === 7) {
-      out.box(...onHead(0, 0.09, -0.005), 0.205, 0.11, 0.225, [0.45, 0.1, 0.08], MAT.fabric, 0, 0, p.yaw, hp);
+      this.put('helmet', ...onHead(0, 0.06, -0.005), 0.215, 0.19, 0.235, [0.45, 0.1, 0.08], MAT.fabric, 0, 0, p.yaw, hp);
       out.limb(onHead(0, 0.07, -0.11), onHead(0.03, 0.0, -0.19), 0.02, [0.45, 0.1, 0.08], MAT.fabric);
     } else if (hg === 8) {
-      out.box(...onHead(0.02, 0.115, 0), 0.25, 0.06, 0.25, [0.35, 0.1, 0.1], MAT.fabric, 0, 0, p.yaw, hp, 0.15);
+      this.put('helmet', ...onHead(0.02, 0.1, 0), 0.25, 0.1, 0.25, [0.35, 0.1, 0.1], MAT.fabric, 0, 0, p.yaw, hp, 0.15);
     }
     if (look.eyewear === 3 && (hg === 0 || hg === 5)) {
       // Night-vision tubes flipped up on the helmet mount.
@@ -802,16 +813,15 @@ export class Scene {
     for (const [sd, hand] of [[1, grip], [-1, fore]] as const) {
       const sh = at(sd * 0.215, chestL[1] + 0.02, chestL[2]);
       const el: V3 = [(sh[0] + hand[0]) / 2 + right[0] * sd * 0.09, (sh[1] + hand[1]) / 2 - 0.15, (sh[2] + hand[2]) / 2 + right[2] * sd * 0.09 - fwd[2] * 0.03];
-      out.box(sh[0], sh[1], sh[2], 0.15 * bulk, 0.15, 0.15, fatigues, MAT.fabric); // shoulder
-      out.limb(sh, el, 0.062 * bulk, bare ? skin : fatigues, bare ? MAT.skin : MAT.fabric, 0, 0.06 * bulk);
-      if (bare) out.limb(sh, [(sh[0] * 2 + el[0]) / 3, (sh[1] * 2 + el[1]) / 3, (sh[2] * 2 + el[2]) / 3], 0.07 * bulk, fatigues, MAT.fabric);
-      out.limb(el, hand as V3, 0.05 * bulk, bare || rolled ? skin : fatigues, bare || rolled ? MAT.skin : MAT.fabric, 0, 0.048 * bulk);
-      if (look.pads === 2) out.box(el[0], el[1], el[2], 0.11, 0.12, 0.11, [0.5, 0.5, 0.5], MAT.polymer);
+      this.seg('upperArm', sh, el, 0.065 * bulk, bare ? skin : fatigues, bare ? MAT.skin : MAT.fabric, 0.063 * bulk, right);
+      if (bare) this.seg('upperArm', sh, [(sh[0] * 2 + el[0]) / 3, (sh[1] * 2 + el[1]) / 3, (sh[2] * 2 + el[2]) / 3], 0.072 * bulk, fatigues, MAT.fabric, 0.07 * bulk, right);
+      this.seg('forearm', el, hand as V3, 0.052 * bulk, bare || rolled ? skin : fatigues, bare || rolled ? MAT.skin : MAT.fabric, 0.048 * bulk, right);
+      if (look.pads === 2) this.put('gear', el[0], el[1], el[2], 0.11, 0.12, 0.11, [0.5, 0.5, 0.5], MAT.polymer);
       // Hand: palm, thumb and fingers wrapped round the weapon.
-      out.box(hand[0], hand[1], hand[2], 0.075, 0.085, 0.095, glove, gloveMat, 0, 0, p.yaw, pitch);
-      for (let f = -1; f <= 1; f++) out.limb([hand[0] - right[0] * sd * 0.03, hand[1] + f * 0.02, hand[2] - right[2] * sd * 0.03], [hand[0] - right[0] * sd * 0.045, hand[1] + f * 0.02 - 0.012, hand[2] - right[2] * sd * 0.045 + fwd[2] * 0.02], 0.012, glove, gloveMat);
+      const hd = [hand[0] - el[0], hand[1] - el[1], hand[2] - el[2]], hl = Math.hypot(hd[0], hd[1], hd[2]) || 1;
+      this.seg('hand', [hand[0] - (hd[0] / hl) * 0.04, hand[1] - (hd[1] / hl) * 0.04, hand[2] - (hd[2] / hl) * 0.04], [hand[0] + (hd[0] / hl) * 0.1, hand[1] + (hd[1] / hl) * 0.1, hand[2] + (hd[2] / hl) * 0.1], 0.048, glove, gloveMat, 0.03, right);
     }
-    if (p.rec[P.shield] > 0) hard.box(...at(0, chestL[1] - 0.1, chestL[2] - 0.3), 0.6, 0.8, 0.06, [0.8, 0.8, 0.8], MAT.rust, 0, 0, p.yaw);
+    if (p.rec[P.shield] > 0) this.put('gear', ...at(0, chestL[1] - 0.1, chestL[2] - 0.3), 0.6, 0.8, 0.06, [0.8, 0.8, 0.8], MAT.rust, 0, 0, p.yaw);
     void neck;
   }
 
@@ -825,6 +835,7 @@ export class Scene {
     const power = !!hdr?.[H.power];
     const { casters, round, glows, groups } = this;
     casters.n = round.n = glows.n = this.vm.n = 0;
+    for (const part of Object.values(this.parts)) part.batch.n = part.vm.n = 0;
     for (const g of groups.values()) g.batch.n = 0;
     const lights: LightSrc[] = [];
     const tmp = mat4();
@@ -1166,6 +1177,7 @@ export class Scene {
     add(this.cube, this.worldGlow, false);
     add(this.cube, glows, false);
     add(this.sphere, vm, false);
+    for (const part of Object.values(this.parts)) { add(part.mesh, part.batch, true); add(part.mesh, part.vm, false); }
     for (const g of groups.values()) add(g.mesh, g.batch, g.shadow);
 
     this.hurt = Math.max(0, this.hurt - dt * 1.5);

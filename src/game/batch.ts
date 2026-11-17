@@ -34,7 +34,7 @@ export class Batch {
     this.tail(o, c, layer, metallic, roughness, emissive, flags);
   }
   /** Unit sphere stretched between two points into a limb of radius r (rz for the depth axis). */
-  limb(a: V3, b: V3, r: number, c: ArrayLike<number>, layer: number, flags = 0, rz = r, side?: V3): void {
+  limb(a: V3, b: V3, r: number, c: ArrayLike<number>, layer: number, flags = 0, rz = r, side?: V3, cap = 1.6): void {
     const d: V3 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
     const len = Math.hypot(d[0], d[1], d[2]) || 1e-4;
     const y: V3 = [d[0] / len, d[1] / len, d[2] / len];
@@ -46,7 +46,7 @@ export class Batch {
     if (xl < 1e-4) { ref = [1, 0, 0]; x = [ref[1] * y[2] - ref[2] * y[1], ref[2] * y[0] - ref[0] * y[2], ref[0] * y[1] - ref[1] * y[0]]; xl = Math.hypot(x[0], x[1], x[2]) || 1; }
     x = [x[0] / xl, x[1] / xl, x[2] / xl];
     const z: V3 = [x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]];
-    const sy = len + r * 1.6, sx = r * 2, sz = rz * 2;
+    const sy = len + r * cap, sx = r * 2, sz = rz * 2;
     const o = this.grow();
     this.data.set([x[0] * sx, x[1] * sx, x[2] * sx, 0, y[0] * sy, y[1] * sy, y[2] * sy, 0, z[0] * sz, z[1] * sz, z[2] * sz, 0, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2, 1], o);
     this.tail(o, c, layer, 0, 1, 0, flags);
