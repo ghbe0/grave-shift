@@ -125,49 +125,16 @@
       <div class="row"><button id="btn-loadout-done" class="primary">Done</button><button id="btn-loadout-reset">Reset</button></div>
     </section>
 
-    <section id="screen-customize" class="screen wide" hidden>
-      <h2>Customize</h2>
-      <div class="custom-grid">
-        <fieldset><legend>Operator</legend>
-          <label>Vest <select id="cz-vest"></select></label>
-          <div id="cz-vest-swatch" class="swatch"></div>
-          <label>Fatigues <select id="cz-fatigues"></select></label>
-          <label>Headgear <select id="cz-headgear"></select></label>
-          <label>Helmet colour <select id="cz-helmet"></select></label>
-          <label>Eyewear <select id="cz-eyewear"></select></label>
-          <label>Face <select id="cz-face"></select></label>
-        </fieldset>
-        <fieldset><legend>Body and gear</legend>
-          <label>Skin tone <select id="cz-skin"></select></label>
-          <label>Build <select id="cz-build"></select></label>
-          <label>Sleeves <select id="cz-sleeves"></select></label>
-          <label>Gloves <select id="cz-gloves"></select></label>
-          <label>Boots <select id="cz-boots"></select></label>
-          <label>Pads <select id="cz-pads"></select></label>
-          <label>Pack <select id="cz-pack"></select></label>
-          <p class="hint">Hold T in a match to see your operator in third person.</p>
-        </fieldset>
-        <fieldset><legend>Weapons</legend>
-          <label>Camo <select id="cz-camo"></select></label>
-          <canvas id="cz-camo-swatch" class="swatch" width="128" height="64"></canvas>
-          <p id="cz-camo-note" class="hint"></p>
-          <label>Sight reticle <select id="cz-reticle"></select></label>
-          <label>Reticle colour <select id="cz-reticleColor"></select></label>
-          <div id="cz-reticle-preview" class="reticle-preview"></div>
-        </fieldset>
-        <fieldset><legend>Crosshair</legend>
-          <label>Style <select id="cz-crosshair"></select></label>
-          <label>Colour <select id="cz-crosshairColor"></select></label>
-          <div class="crosshair-preview"><div id="cz-crosshair-preview" class="xh"><i></i><i></i><i></i><i></i><b></b></div></div>
-        </fieldset>
-        <fieldset><legend>Calling card</legend>
-          <label>Background <select id="cz-card"></select></label>
-          <label>Emblem <select id="cz-emblem"></select></label>
-          <div id="cz-card-preview"></div>
-          <p class="hint">Shown next to your name in the lobby and on the scoreboard.</p>
-        </fieldset>
+    <section id="screen-customize" class="screen" hidden>
+      <div class="cz-head"><h2>Operator</h2><div id="cz-card-preview"></div></div>
+      <nav id="cz-tabs"></nav>
+      <div id="cz-groups"></div>
+      <div class="row">
+        <button id="btn-customize-done" class="primary">Done</button>
+        <button id="btn-cz-random">Randomize</button>
+        <button id="btn-cz-reset">Reset</button>
       </div>
-      <div class="row"><button id="btn-customize-done" class="primary">Done</button></div>
+      <p class="hint">Drag the operator to turn them. Hold T in a match to see yourself in third person.</p>
     </section>
 
     <section id="screen-settings" class="screen" hidden>

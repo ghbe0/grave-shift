@@ -95,6 +95,12 @@ class App {
   private looks = new Map<number, Look>();
   /** Small previews of each camo, cut from the generated textures. */
   private swatches = new Map<number, ImageData>();
+  private swatchUrls = new Map<number, string>();
+  private czTab = 'Head';
+  /** The customize screen's 3D preview is running (a private, never-stepped session). */
+  private showroom = false;
+  private showYaw = 0.4;
+  private showDir: number | null = null;
   private materialStream: MaterialStream | null = null;
   private rendererName = '';
   private limiter = new FrameLimiter();
@@ -190,54 +196,100 @@ class App {
     this.renderCustomize();
   }
 
+  /** Every customization option, grouped into the tabs of the operator screen. */
+  private czGroups(): { tab: string; sections: { key: keyof Look; title: string; options: { name: string; art: string }[]; offset?: number }[] }[] {
+    const rgb = (c: number[]) => `rgb(${c.map(v => Math.round(Math.min(1, Math.pow(Math.max(0, v), 1 / 2.2)) * 255)).join(',')})`;
+    const sw = (c: number[]) => `<i class="sw" style="background:${rgb(c)}"></i>`;
+    const fabric = (c: number[]) => `<i class="sw cloth" style="background-color:${rgb(c.map(v => v * 0.32))}"></i>`;
+    const word = (t: string) => `<i class="sw word">${t}</i>`;
+    const camoArt = (layer: number) => {
+      const img = layer >= 0 ? this.swatches.get(layer) : null;
+      if (!img) return `<i class="sw" style="background:#2b3038"></i>`;
+      let url = this.swatchUrls.get(layer);
+      if (!url) {
+        const c = document.createElement('canvas');
+        c.width = img.width; c.height = img.height;
+        c.getContext('2d')!.putImageData(img, 0, 0);
+        url = c.toDataURL();
+        this.swatchUrls.set(layer, url);
+      }
+      return `<i class="sw" style="background:url(${url}) center/cover"></i>`;
+    };
+    const glyphs: Record<string, string[]> = {
+      headgear: ['🪖', '🧢', '🧶', '🥷', '👤', '🎧', '👒', '🎀', '🎖'],
+      face: ['🙂', '🧔‍♂️', '🧔', '🥷', '🎨', '😷', '👨'],
+      eyewear: ['—', '🥽', '🕶', '🔭', '👓'],
+      build: ['L', 'A', 'H'], sleeves: ['⟂', '↟', '✕'], pads: ['—', '◖', '◖◗'], pack: ['—', '🎒', '📻', '💧', '⛺'],
+    };
+    const g = (key: string, names: string[]) => names.map((name, k) => ({ name, art: word(glyphs[key]?.[k] ?? name.slice(0, 2)) }));
+    return [
+      { tab: 'Head', sections: [
+        { key: 'headgear', title: 'Headgear', options: g('headgear', HEADGEAR) },
+        { key: 'helmet', title: 'Helmet colour', options: HELMETS.map(h => ({ name: h.name, art: sw(h.rgb) })) },
+        { key: 'face', title: 'Face', options: g('face', FACES) },
+        { key: 'eyewear', title: 'Eyewear', options: g('eyewear', EYEWEAR) },
+      ] },
+      { tab: 'Body', sections: [
+        { key: 'skin', title: 'Skin tone', options: SKINS.map(x => ({ name: x.name, art: sw(x.rgb.map(v => v * 0.75)) })) },
+        { key: 'build', title: 'Build', options: g('build', BUILDS) },
+        { key: 'sleeves', title: 'Sleeves', options: g('sleeves', SLEEVES) },
+      ] },
+      { tab: 'Gear', sections: [
+        { key: 'vest', title: 'Plate carrier', options: [{ name: 'Team colour', art: `<i class="sw" style="background:linear-gradient(135deg,#ff7a2f 50%,#3d8bff 50%)"></i>` }, ...VESTS.map(v => ({ name: v.name, art: sw(v.rgb) }))] },
+        { key: 'fatigues', title: 'Fatigues', options: FATIGUES.map(f => ({ name: f.name, art: fabric(f.rgb) })) },
+        { key: 'gloves', title: 'Gloves', options: GLOVES.map(x => ({ name: x.name, art: x.rgb[0] ? fabric(x.rgb) : word('✋') })) },
+        { key: 'boots', title: 'Boots', options: BOOTS.map(x => ({ name: x.name, art: fabric(x.rgb) })) },
+        { key: 'pads', title: 'Pads', options: g('pads', PADS) },
+        { key: 'pack', title: 'Pack', options: g('pack', PACKS) },
+      ] },
+      { tab: 'Weapon', sections: [
+        { key: 'camo', title: 'Camo', options: CAMOS.map(c => ({ name: c.name, art: c.layer < 0 ? word('—') : camoArt(c.layer) })) },
+        { key: 'reticle', title: 'Sight reticle', options: RETICLES.map((r, k) => ({ name: r, art: `<i class="sw svg">${reticleSvg(k, COLORS[this.look.reticleColor].css)}</i>` })) },
+        { key: 'reticleColor', title: 'Reticle colour', options: COLORS.map(c => ({ name: c.name, art: `<i class="sw" style="background:${c.css}"></i>` })) },
+        { key: 'crosshair', title: 'Crosshair', options: CROSSHAIRS.map((c, k) => ({ name: c, art: `<i class="sw xhwrap"><span class="xh" data-style="${k}" style="--ch:${COLORS[this.look.crosshairColor].css};--gap:5px"><i></i><i></i><i></i><i></i><b></b></span></i>` })) },
+        { key: 'crosshairColor', title: 'Crosshair colour', options: COLORS.map(c => ({ name: c.name, art: `<i class="sw" style="background:${c.css}"></i>` })) },
+      ] },
+      { tab: 'Card', sections: [
+        { key: 'card', title: 'Calling card', options: CARDS.map(c => ({ name: c.name, art: `<i class="sw wide" style="background:${c.css}"></i>` })) },
+        { key: 'emblem', title: 'Emblem', options: EMBLEMS.map(e => ({ name: e.name, art: `<i class="sw svg"><svg viewBox="0 0 24 24" fill="currentColor">${e.svg}</svg></i>` })) },
+      ] },
+    ];
+  }
+
   private renderCustomize(): void {
     const l = this.look;
-    const fill = (id: string, names: string[], value: number, offset = 0) => {
-      const sel = $<HTMLSelectElement>(id);
-      if (sel.options.length !== names.length + offset) {
-        sel.replaceChildren(...(offset ? [new Option('Team colour', '0')] : []), ...names.map((n, i) => new Option(n, String(i + offset))));
-      }
-      sel.value = String(value);
-    };
-    fill('cz-vest', VESTS.map(v => v.name), l.vest, 1);
-    fill('cz-fatigues', FATIGUES.map(f => f.name), l.fatigues);
-    fill('cz-headgear', HEADGEAR, l.headgear);
-    fill('cz-helmet', HELMETS.map(h => h.name), l.helmet);
-    fill('cz-eyewear', EYEWEAR, l.eyewear);
-    fill('cz-face', FACES, l.face);
-    fill('cz-skin', SKINS.map(x => x.name), l.skin);
-    fill('cz-build', BUILDS, l.build);
-    fill('cz-sleeves', SLEEVES, l.sleeves);
-    fill('cz-gloves', GLOVES.map(x => x.name), l.gloves);
-    fill('cz-boots', BOOTS.map(x => x.name), l.boots);
-    fill('cz-pads', PADS, l.pads);
-    fill('cz-pack', PACKS, l.pack);
-    fill('cz-camo', CAMOS.map(c => c.name), l.camo);
-    fill('cz-reticle', RETICLES, l.reticle);
-    fill('cz-reticleColor', COLORS.map(c => c.name), l.reticleColor);
-    fill('cz-crosshair', CROSSHAIRS, l.crosshair);
-    fill('cz-crosshairColor', COLORS.map(c => c.name), l.crosshairColor);
-    fill('cz-card', CARDS.map(c => c.name), l.card);
-    fill('cz-emblem', EMBLEMS.map(e => e.name), l.emblem);
-    const sw = $<HTMLCanvasElement>('cz-camo-swatch');
-    const ctx = sw.getContext('2d')!;
-    const camo = CAMOS[l.camo];
-    const img = camo.layer >= 0 ? this.swatches.get(camo.layer) : null;
-    ctx.fillStyle = '#20252c';
-    ctx.fillRect(0, 0, sw.width, sw.height);
-    if (img) {
-      const tmp = new OffscreenCanvas(img.width, img.height);
-      tmp.getContext('2d')!.putImageData(img, 0, 0);
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(tmp, 0, 0, sw.width, sw.height);
-    }
-    $('cz-camo-note').textContent = camo.layer < 0 ? 'The gun\'s own finish.' : img ? '' : 'Generating texture...';
-    $('cz-reticle-preview').innerHTML = reticleSvg(l.reticle, COLORS[l.reticleColor].css);
-    $('cz-crosshair-preview').dataset.style = String(l.crosshair);
-    $('cz-crosshair-preview').style.setProperty('--ch', COLORS[l.crosshairColor].css);
+    const groups = this.czGroups();
+    const tab = groups.find(g => g.tab === this.czTab) ?? groups[0];
+    $('cz-tabs').innerHTML = groups.map(g => `<button data-tab="${g.tab}" class="${g === tab ? 'on' : ''}">${g.tab}</button>`).join('');
+    $('cz-groups').innerHTML = tab.sections.map(sec => `<section><h3>${sec.title}<small>${escapeHtml(sec.options[(l[sec.key] as number) - (sec.offset ?? 0)]?.name ?? '')}</small></h3><div class="cz-tiles">${
+      sec.options.map((o, k) => `<button class="cz-tile${l[sec.key] === k ? ' on' : ''}" data-key="${sec.key}" data-v="${k}" title="${escapeHtml(o.name)}">${o.art}<span>${escapeHtml(o.name)}</span></button>`).join('')}</div></section>`).join('');
+    $('cz-tabs').querySelectorAll<HTMLButtonElement>('[data-tab]').forEach(b => (b.onclick = () => { this.czTab = b.dataset.tab!; this.renderCustomize(); }));
+    $('cz-groups').querySelectorAll<HTMLButtonElement>('[data-key]').forEach(b => (b.onclick = () => this.setLook({ ...this.look, [b.dataset.key!]: +b.dataset.v! })));
     $('cz-card-preview').innerHTML = cardHtml(l, escapeHtml(this.name() || 'Player'));
-    const vest = l.vest ? VESTS[l.vest - 1].rgb : [1.0, 0.42, 0.12];
-    $('cz-vest-swatch').style.background = `rgb(${vest.map(v => Math.round(Math.min(1, v) * 255)).join(',')})`;
+  }
+
+  /**
+   * The operator showroom behind the customize screen: a quiet corner of a level with your own
+   * operator standing in it, lit, turning when dragged. Built only when no match is running.
+   */
+  private openShowroom(): void {
+    if (this.session) return;
+    const start: StartMsg = { t: 'start', map: 2, mode: 1, seed: 3, rules: defaultRules(1), players: [{ id: 0, team: 0, loadout: this.editor.loadout, look: this.look }] };
+    const session = new Session(this.sim, start, 0, null, null);
+    this.session = session;
+    this.showroom = true;
+    this.looks.set(0, this.look);
+    this.scene = new Scene(this.renderer, this.sim, session, id => this.lookOf(id), 0.6);
+    document.body.classList.add('showroom');
+  }
+  private closeShowroom(): void {
+    if (!this.showroom) return;
+    this.showroom = false;
+    this.session?.dispose();
+    this.session = null;
+    this.scene = null;
+    this.showDir = null;
+    document.body.classList.remove('showroom');
   }
 
   private name(): string { return $<HTMLInputElement>('name').value.trim(); }
@@ -294,11 +346,20 @@ class App {
     click('btn-loadout', () => this.openLoadout('main'));
     click('btn-customize', () => this.openCustomize('main'));
     click('btn-lobby-customize', () => this.openCustomize('lobby'));
-    click('btn-customize-done', () => this.show(this.back));
-    for (const key of ['vest', 'fatigues', 'headgear', 'camo', 'reticle', 'reticleColor', 'crosshair', 'crosshairColor', 'card', 'emblem', 'helmet', 'eyewear', 'face', 'skin', 'build', 'sleeves', 'gloves', 'boots', 'pads', 'pack'] as (keyof Look)[]) {
-      const sel = $<HTMLSelectElement>(`cz-${key}`);
-      sel.onchange = () => this.setLook({ ...this.look, [key]: +sel.value });
-    }
+    click('btn-customize-done', () => { this.closeShowroom(); this.show(this.back); });
+    click('btn-cz-random', () => {
+      const pick = (n: number) => Math.floor(Math.random() * n);
+      const sizes: Partial<Record<keyof Look, number>> = { vest: VESTS.length + 1, fatigues: FATIGUES.length, headgear: HEADGEAR.length, helmet: HELMETS.length, eyewear: EYEWEAR.length, face: FACES.length, skin: SKINS.length, build: BUILDS.length, sleeves: SLEEVES.length, gloves: GLOVES.length, boots: BOOTS.length, pads: PADS.length, pack: PACKS.length, camo: CAMOS.length, card: CARDS.length, emblem: EMBLEMS.length };
+      const next = { ...this.look };
+      for (const [k, n] of Object.entries(sizes)) (next as Record<string, number>)[k] = pick(n!);
+      this.setLook(next);
+    });
+    click('btn-cz-reset', () => this.setLook({ ...DEFAULT_LOOK }));
+    // Drag the operator to turn them.
+    let dragX: number | null = null;
+    this.canvas.addEventListener('pointerdown', e => { if (this.showroom) dragX = e.clientX; });
+    addEventListener('pointermove', e => { if (dragX !== null) { this.showYaw += (e.clientX - dragX) * 0.012; dragX = e.clientX; } });
+    addEventListener('pointerup', () => (dragX = null));
     this.hud.applyLook(this.look);
     click('btn-lobby-loadout', () => this.openLoadout('lobby'));
     click('btn-loadout-done', () => { if (this.editor.check()) this.show(this.back); });
@@ -413,7 +474,7 @@ class App {
     this.canvas.onclick = () => { if (this.session && this.screen === 'none') this.input.lock(); };
   }
 
-  private openCustomize(back: string): void { this.back = back; this.show('customize'); this.renderCustomize(); }
+  private openCustomize(back: string): void { this.back = back; this.show('customize'); this.openShowroom(); this.renderCustomize(); }
   private openLoadout(back: string): void { this.back = back; this.editor.close(); this.editor.render(); this.show('loadout'); }
   private openSettings(back: string): void {
     this.back = back;
@@ -810,7 +871,28 @@ class App {
       const foot = Math.floor(me[P['ctl.bob_ph']] / Math.PI);
       if (foot !== this.lastFoot) { this.lastFoot = foot; this.sfx.step(!!me[P['ctl.sprinting']]); }
     }
-    const view = s.view(this.settings.fov);
+    let view = s.view(this.settings.fov);
+    if (this.showroom) {
+      // Showroom: the camera stands in front of the operator, a little to one side; dragging turns them.
+      const f = s.feet();
+      // Stand the camera on whichever side has the most open floor, and turn it a little so the
+      // operator sits right of centre, clear of the menu panel.
+      if (this.showDir === null) {
+        let best = 0, clear = -1;
+        for (let k = 0; k < 12; k++) {
+          const a = (k / 12) * Math.PI * 2, d = [Math.sin(a), 0, Math.cos(a)];
+          const c = s.game.raycast([f[0], f[1] + 1.2, f[2]], d, 6);
+          if (c > clear) { clear = c; best = a; }
+        }
+        this.showDir = best;
+      }
+      const a = this.showDir, dist = 2.3;
+      view = { pos: [f[0] + Math.sin(a) * dist, f[1] + 1.2, f[2] + Math.cos(a) * dist], yaw: 0, pitch: -0.08, roll: 0, fov: 45 };
+      view.yaw = Math.atan2(-(f[0] - view.pos[0]), -(f[2] - view.pos[2])) + 0.28;
+      const frame = this.scene.build(view, dt, this.canvas.width / this.canvas.height, { fov: 50, motionBlur: false, dof: true, third: 1, bodyYaw: (this.showDir ?? 0) + this.showYaw + Math.sin(now / 1800) * 0.06 + Math.PI });
+      this.renderer.render(frame);
+      return;
+    }
     // Third person while the key is held: the camera eases out over the right shoulder (stopping
     // short of walls) and back in again on release.
     this.third += ((this.input.thirdPerson ? 1 : 0) - this.third) * Math.min(1, dt * 9);

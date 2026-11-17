@@ -48,7 +48,7 @@ interface Tracer { a: number[]; b: number[]; t: number; color: RGB }
 interface Flash { pos: number[]; t: number; life: number; color: RGB; radius: number; size: number; glow?: number; vel?: number[]; rise?: number }
 interface LightSrc { pos: number[]; radius: number; color: RGB; intensity: number; flicker?: number }
 
-export interface SceneSettings { fov: number; motionBlur: boolean; dof: boolean; /** 0 first person .. 1 third person. */ third?: number }
+export interface SceneSettings { fov: number; motionBlur: boolean; dof: boolean; /** 0 first person .. 1 third person. */ third?: number; /** Which way our own body faces in third person (default: the view). */ bodyYaw?: number }
 
 /** A character's facing frame: positions are given as (right, up, forward) offsets. */
 function frame(x: number, y: number, z: number, yaw: number) {
@@ -946,7 +946,7 @@ export class Scene {
     const third = (settings.third ?? 0) > 0.25;
     if (third && me.length && me[P.life] !== 2) {
       const f = s.feet();
-      this.survivor(round, glows, groups, { id: s.selfId, x: f[0], y: f[1], z: f[2], yaw: view.yaw, rec: me }, t, dt);
+      this.survivor(round, glows, groups, { id: s.selfId, x: f[0], y: f[1], z: f[2], yaw: settings.bodyYaw ?? view.yaw, rec: me }, t, dt);
     }
 
     // Power-ups, grenades and lingering effects.
@@ -1098,7 +1098,6 @@ export class Scene {
       const model = this.drawModel(groups, `weapons/${slug}`, world, FLAG_VIEWMODEL | FLAG_NOSHADOW, false, CAMOS[myLook.camo]?.layer ?? -1);
       // Arms: sleeves from below the screen edge to gloved hands on the grip and the handguard.
       const cam = (x: number, y: number, z: number) => transformPoint(camWorld, [x, y, z]) as V3;
-      const grip = transformPoint(world, [0, -0.035, 0.015]) as V3;
       const foreRest = transformPoint(world, [0, -0.005, Math.max(-0.3, (model?.min[2] ?? -0.35) * 0.62)]) as V3;
       // Reload: the support hand drops to the magazine, pulls it down and out of view, and seats a
       // fresh one; on a swap both hands come off as the weapon goes down.
@@ -1109,23 +1108,57 @@ export class Scene {
       const fore = [0, 1, 2].map(i => foreRest[i] + (magHand[i] - foreRest[i]) * reload) as V3;
       const sleeve: RGB = FATIGUES[myLook.fatigues]?.rgb ?? FATIGUES[0].rgb;
       const vf = FLAG_VIEWMODEL | FLAG_NOSHADOW;
-      // Only forearms are visible: they enter from below the screen edge, like a real first-person view.
-      const rElbow = cam(0.24 - ads * 0.1, -0.42, -0.2), lElbow = cam(-0.1 + ads * 0.04, -0.4, -0.32);
-      // Forearms and gloves follow the operator's customization.
+      // Arms and hands follow the operator's customization.
       const mySkin: RGB = SKINS[myLook.skin]?.rgb ?? SKINS[1].rgb;
       const bareArm = myLook.sleeves > 0;
       const armTint = bareArm ? mySkin : sleeve, armMat = bareArm ? MAT.skin : MAT.fabric;
-      const gloveTint: RGB = myLook.gloves === 4 ? mySkin : GLOVES[myLook.gloves]?.rgb ?? [0.8, 0.8, 0.8];
-      const gloveMat = myLook.gloves === 4 ? MAT.skin : MAT.fabric;
-      vm.limb(rElbow, grip, 0.034, armTint, armMat, vf);
-      vm.limb(lElbow, fore, 0.032, armTint, armMat, vf);
-      // The magazine travels with the hand while it is out of the weapon.
-      if (reload > 0.5 && pull > 0.15) this.casters.box(fore[0], fore[1] - 0.02, fore[2], 0.028, 0.13, 0.05, [0.2, 0.2, 0.2], MAT.polymer, 0, vf, view.yaw, view.pitch + 0.2);
-      // Gloved hands wrapped around the grip and the handguard.
-      for (const [h, from] of [[grip, rElbow], [fore, lElbow]] as const) {
-        const d = [h[0] - from[0], h[1] - from[1], h[2] - from[2]], l = Math.hypot(d[0], d[1], d[2]) || 1;
-        vm.limb([h[0] - d[0] / l * 0.04, h[1] - d[1] / l * 0.04, h[2] - d[2] / l * 0.04], [h[0] + d[0] / l * 0.03, h[1] + d[1] / l * 0.03, h[2] + d[2] / l * 0.03], 0.03, gloveTint, gloveMat, vf, 0.036);
+      const bareHands = myLook.gloves === 4;
+      const gloveTint: RGB = bareHands ? mySkin : GLOVES[myLook.gloves]?.rgb ?? [0.8, 0.8, 0.8];
+      const gloveMat = bareHands ? MAT.skin : MAT.fabric;
+      const gl = (x: number, y: number, z: number) => transformPoint(world, [x, y, z]) as V3;
+      const gunRight = (() => { const o = gl(0, 0, 0), r = gl(1, 0, 0); return [r[0] - o[0], r[1] - o[1], r[2] - o[2]] as V3; })();
+      const lerp3 = (p: V3, q: V3, k: number): V3 => [p[0] + (q[0] - p[0]) * k, p[1] + (q[1] - p[1]) * k, p[2] + (q[2] - p[2]) * k];
+      const finger = (pts: V3[], r: number) => { for (let i = 0; i < pts.length - 1; i++) vm.limb(pts[i], pts[i + 1], r * (1 - i * 0.12), gloveTint, gloveMat, vf); };
+      // A forearm from an elbow below the screen edge to the wrist, with a cuff where the sleeve or
+      // glove ends; then the hand itself.
+      const arm = (elbow: V3, wrist: V3, r: number) => {
+        this.seg('forearm', elbow, wrist, r, armTint, armMat, r * 0.92, gunRight, vf);
+        if (myLook.sleeves === 0) this.seg('forearm', lerp3(wrist, elbow, 0.08), lerp3(wrist, elbow, 0.2), r * 1.12, sleeve, MAT.fabric, r * 1.05, gunRight, vf); // sleeve cuff
+        if (myLook.sleeves === 1) this.seg('upperArm', lerp3(wrist, elbow, 0.8), lerp3(wrist, elbow, 1.05), r * 1.25, sleeve, MAT.fabric, r * 1.2, gunRight, vf); // rolled sleeve
+        if (!bareHands) this.seg('forearm', lerp3(wrist, elbow, -0.02), lerp3(wrist, elbow, 0.1), r * 0.92, gloveTint, gloveMat, r * 0.85, gunRight, vf); // glove cuff
+      };
+
+      // Right hand on the pistol grip. Grip space: y up the grip, z toward the back, x right.
+      const ga = -0.28, gca = Math.cos(ga), gsa = Math.sin(ga);
+      const gp = (x: number, y: number, z: number) => gl(x, y * gca - z * gsa - 0.045, y * gsa + z * gca + 0.012);
+      const rWrist = gl(0.012, 0.012, 0.095);
+      const rElbow = cam(0.2 - ads * 0.08, -0.36, 0.03);
+      arm(rElbow, rWrist, 0.05);
+      this.seg('hand', rWrist, gp(0.012, -0.02, 0.026), 0.044, gloveTint, gloveMat, 0.026, gunRight, vf); // back of the hand along the grip
+      for (let k = 0; k < 3; k++) {
+        const y = 0.0 - k * 0.022;
+        finger([gp(0.025, y, 0.012), gp(0.022, y, -0.016), gp(0.004, y - 0.004, -0.026), gp(-0.014, y - 0.006, -0.016)], 0.0092);
       }
+      // Index finger: along the trigger guard, curling onto the trigger while firing.
+      const squeeze = this.muzzle > 0 ? 1 : 0;
+      finger([gl(0.024, -0.004, 0.012), gl(0.022, -0.008, -0.016), lerp3(gl(0.012, -0.004, -0.04), gl(0.004, -0.016, -0.026), 0.4 + squeeze * 0.6)], 0.0088);
+      finger([gl(-0.016, 0.004, 0.035), gl(-0.022, -0.006, 0.008), gl(-0.016, -0.004, -0.012)], 0.0105); // thumb round the far side
+
+      // Left hand under the handguard (or carrying the magazine during a reload).
+      const shift = [fore[0] - foreRest[0], fore[1] - foreRest[1], fore[2] - foreRest[2]];
+      const fz = Math.max(-0.3, (model?.min[2] ?? -0.35) * 0.62);
+      const lp = (x: number, y: number, z: number): V3 => { const q = gl(x, y, z + fz); return [q[0] + shift[0], q[1] + shift[1], q[2] + shift[2]]; };
+      const lWrist = lp(-0.03, -0.05, 0.06);
+      const lElbow = cam(-0.17 + ads * 0.07, -0.36, -0.06);
+      arm(lElbow, lWrist, 0.047);
+      this.seg('hand', lWrist, lp(-0.006, -0.018, -0.02), 0.044, gloveTint, gloveMat, 0.026, gunRight, vf); // palm under the handguard
+      for (let k = 0; k < 4; k++) {
+        const z = -0.03 + k * 0.019;
+        finger([lp(0.004, -0.016, z), lp(0.026, 0.006, z), lp(0.03, 0.038, z - 0.004)], 0.0088);
+      }
+      finger([lp(-0.03, -0.01, 0.025), lp(-0.03, 0.02, 0.0), lp(-0.024, 0.045, -0.02)], 0.0105); // thumb along the near side
+      // The magazine travels with the hand while it is out of the weapon.
+      if (reload > 0.5 && pull > 0.15) this.put('gear', fore[0], fore[1] - 0.04, fore[2], 0.03, 0.13, 0.055, [0.18, 0.18, 0.19], MAT.polymer, 0, vf, view.yaw, view.pitch + 0.2);
       if (this.muzzle > 0) {
         this.muzzle -= dt;
         const tip = mat4();
