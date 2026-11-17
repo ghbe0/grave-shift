@@ -4,7 +4,7 @@
 import { WF, type Sim } from '../core/sim';
 import { loadModel, type Model } from '../gfx/loader';
 import { compose, invert, lookAt, mat4, mul, ortho, perspective, transformPoint } from '../gfx/mat';
-import { cubeMesh, cylinderMesh, FLAG_NOSHADOW, FLAG_VIEWMODEL, LIGHT_FLOATS, MAT, MAX_LIGHTS, sphereMesh, type Draw, type Frame, type Renderer } from '../gfx/renderer';
+import { cubeMesh, cylinderMesh, FLAG_NOSHADOW, INSTANCE_FLOATS, FLAG_VIEWMODEL, LIGHT_FLOATS, MAT, MAX_LIGHTS, sphereMesh, type Draw, type Frame, type Renderer } from '../gfx/renderer';
 import { Batch, type V3 } from './batch';
 import { bodyParts } from '../gfx/anatomy';
 import { BOOTS, CAMOS, FATIGUES, GLOVES, HELMETS, SKINS, VESTS, type Look } from './look';
@@ -64,6 +64,21 @@ function chain(at: (x: number, y: number, z: number) => V3, root: [number, numbe
   return [at(...k), at(...e)];
 }
 
+const CHUNK = 16;
+/** The six planes of a view-projection matrix (column-major), each as a, b, c, d. */
+function frustum(m: ArrayLike<number>): number[][] {
+  const row = (r: number) => [m[r], m[4 + r], m[8 + r], m[12 + r]];
+  const [r0, r1, r2, r3] = [row(0), row(1), row(2), row(3)];
+  const add = (a: number[], b: number[], s: number) => a.map((v, i) => v + s * b[i]);
+  return [add(r3, r0, 1), add(r3, r0, -1), add(r3, r1, 1), add(r3, r1, -1), add(r3, r2, 1), add(r3, r2, -1)];
+}
+/** Whether an axis-aligned box (min xyz, max xyz) is at least partly inside the planes. */
+function inside(planes: number[][], b: number[]): boolean {
+  for (const [a, c, e, d] of planes) {
+    if (a * (a > 0 ? b[3] : b[0]) + c * (c > 0 ? b[4] : b[1]) + e * (e > 0 ? b[5] : b[2]) + d < 0) return false;
+  }
+  return true;
+}
 let sceneIds = 0;
 export class Scene {
   private cube: number;
@@ -82,7 +97,7 @@ export class Scene {
   private prevViewProj = mat4();
   private frameData = new Batch();
   private staticCount = -1;
-  private staticDraws: Draw[] = [];
+  private chunks: { mesh: number; first: number; count: number; shadow: boolean; box: number[] }[] = [];
   /** Identifies this scene's static instances to the renderer, which uploads them only once. */
   private readonly staticId = ++sceneIds;
   private lights = new Float32Array(MAX_LIGHTS * LIGHT_FLOATS);
@@ -1222,10 +1237,33 @@ export class Scene {
     const out = this.frameData;
     if (this.staticCount < 0) {
       out.n = 0;
+      // Each batch is sorted into 16 m squares of the map with a bounding box, so squares out of
+      // sight (and out of the sun's shadow box) are skipped without touching the GPU buffer.
       const keep = (mesh: number, batch: Batch, shadow: boolean) => {
         if (!batch.n) return;
-        this.staticDraws.push({ mesh, first: out.n, count: batch.n, shadow });
-        out.append(batch);
+        const d = batch.data, groups = new Map<number, number[]>();
+        for (let i = 0; i < batch.n; i++) {
+          const o = i * INSTANCE_FLOATS;
+          const key = Math.floor(d[o + 12] / CHUNK) * 4096 + Math.floor(d[o + 14] / CHUNK);
+          let g = groups.get(key);
+          if (!g) groups.set(key, (g = []));
+          g.push(i);
+        }
+        for (const key of [...groups.keys()].sort((a, b) => a - b)) {
+          const box = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+          const first = out.n;
+          for (const i of groups.get(key)!) {
+            const o = i * INSTANCE_FLOATS;
+            // Generous: the sum of the axis lengths bounds any unit mesh however it is turned.
+            const r = Math.hypot(d[o], d[o + 1], d[o + 2]) + Math.hypot(d[o + 4], d[o + 5], d[o + 6]) + Math.hypot(d[o + 8], d[o + 9], d[o + 10]) + 0.3;
+            for (let k = 0; k < 3; k++) {
+              box[k] = Math.min(box[k], d[o + 12 + k] - r);
+              box[k + 3] = Math.max(box[k + 3], d[o + 12 + k] + r);
+            }
+            out.copy(batch, i);
+          }
+          this.chunks.push({ mesh, first, count: out.n - first, shadow, box });
+        }
       };
       keep(this.cube, this.world, true);
       keep(this.cylinder, this.worldRound, true);
@@ -1234,7 +1272,16 @@ export class Scene {
       this.staticCount = out.n;
     }
     out.n = this.staticCount;
-    const draws: Draw[] = this.staticDraws.slice();
+    const draws: Draw[] = [];
+    const camPlanes = frustum(viewProj), sunPlanes = frustum(shadowViewProj);
+    for (const c of this.chunks) {
+      const main = inside(camPlanes, c.box), shadow = c.shadow && inside(sunPlanes, c.box);
+      if (!main && !shadow) continue;
+      const prev = draws[draws.length - 1];
+      // Neighbouring squares that are both visible become one draw.
+      if (prev && prev.mesh === c.mesh && prev.first + prev.count === c.first && prev.shadow === shadow && (prev.main !== false) === main) prev.count += c.count;
+      else draws.push({ mesh: c.mesh, first: c.first, count: c.count, shadow, main });
+    }
     const add = (mesh: number, batch: Batch, shadow: boolean) => {
       if (!batch.n) return;
       draws.push({ mesh, first: out.n, count: batch.n, shadow });

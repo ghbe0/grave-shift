@@ -359,7 +359,7 @@ export class WebGL2Renderer implements Renderer {
 
     const drawAll = (shadow: boolean) => {
       for (const dr of f.draws) {
-        if ((shadow && !dr.shadow) || !dr.count) continue;
+        if ((shadow ? !dr.shadow : dr.main === false) || !dr.count) continue;
         const m = this.meshes[dr.mesh];
         if (!m) continue;
         gl.bindVertexArray(m.vao);

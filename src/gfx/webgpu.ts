@@ -300,7 +300,7 @@ export class WebGPURenderer implements Renderer {
     const drawAll = (pass: GPURenderPassEncoder, shadow: boolean) => {
       pass.setVertexBuffer(1, this.instanceBuf);
       for (const dr of f.draws) {
-        if (shadow && !dr.shadow) continue;
+        if (shadow ? !dr.shadow : dr.main === false) continue;
         const m = this.meshes[dr.mesh];
         if (!m || !dr.count) continue;
         if (!shadow) pass.setBindGroup(1, m.bind);

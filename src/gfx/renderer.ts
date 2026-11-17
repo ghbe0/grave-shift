@@ -35,7 +35,8 @@ export interface MeshData {
   texture?: ImageBitmap | null;
 }
 
-export interface Draw { mesh: number; first: number; count: number; shadow: boolean }
+/** `shadow`: drawn into the sun's shadow map; `main` (default true): drawn in the camera pass. */
+export interface Draw { mesh: number; first: number; count: number; shadow: boolean; main?: boolean }
 
 export interface PostSettings {
   exposure: number;

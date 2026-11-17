@@ -50,8 +50,17 @@ export class Batch {
     const z: V3 = [x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]];
     const sy = len + r * cap, sx = r * 2, sz = rz * 2;
     const o = this.grow();
-    this.data.set([x[0] * sx, x[1] * sx, x[2] * sx, 0, y[0] * sy, y[1] * sy, y[2] * sy, 0, z[0] * sz, z[1] * sz, z[2] * sz, 0, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2, 1], o);
+    const m = this.data;
+    m[o] = x[0] * sx; m[o + 1] = x[1] * sx; m[o + 2] = x[2] * sx; m[o + 3] = 0;
+    m[o + 4] = y[0] * sy; m[o + 5] = y[1] * sy; m[o + 6] = y[2] * sy; m[o + 7] = 0;
+    m[o + 8] = z[0] * sz; m[o + 9] = z[1] * sz; m[o + 10] = z[2] * sz; m[o + 11] = 0;
+    m[o + 12] = (a[0] + b[0]) / 2; m[o + 13] = (a[1] + b[1]) / 2; m[o + 14] = (a[2] + b[2]) / 2; m[o + 15] = 1;
     this.tail(o, c, layer, 0, 1, 0, flags);
+  }
+  /** Copies instance `i` of `src`. */
+  copy(src: Batch, i: number): void {
+    const o = this.grow();
+    this.data.set(src.data.subarray(i * INSTANCE_FLOATS, (i + 1) * INSTANCE_FLOATS), o);
   }
   append(other: Batch): void {
     const o = this.grow(other.n);
