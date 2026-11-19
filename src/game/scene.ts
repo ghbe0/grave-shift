@@ -51,7 +51,7 @@ interface Tracer { a: number[]; b: number[]; t: number; color: RGB }
 interface Flash { pos: number[]; t: number; life: number; color: RGB; radius: number; size: number; glow?: number; vel?: number[]; rise?: number }
 interface LightSrc { pos: number[]; radius: number; color: RGB; intensity: number; flicker?: number }
 
-export interface SceneSettings { fov: number; motionBlur: boolean; dof: boolean; /** 0 first person .. 1 third person. */ third?: number; /** Which way our own body faces in third person (default: the view). */ bodyYaw?: number; /** Draw neither our body nor the gun in hand (menu panoramas). */ noSelf?: boolean }
+export interface SceneSettings { fov: number; motionBlur: boolean; dof: boolean; /** 0 first person .. 1 third person. */ third?: number; /** Which way our own body faces in third person (default: the view). */ bodyYaw?: number; /** Draw neither our body nor the gun in hand (menu panoramas). */ noSelf?: boolean; /** A soft photographer's light at this point (the customize preview). */ fill?: [number, number, number] }
 
 /** A character's facing frame: positions are given as (right, up, forward) offsets. */
 function frame(x: number, y: number, z: number, yaw: number) {
@@ -831,55 +831,40 @@ export class Scene {
     const headL: [number, number, number] = [sway, chestL[1] + 0.27, chestL[2] + 0.04 + Math.sin(-hp) * 0.02];
     const head = at(...headL);
     this.seg('neck', neck, at(headL[0], headL[1] - 0.09, headL[2] - 0.01), 0.062, skin, MAT.skin, 0.062, right);
-    const masked = look.face === 3;
-    const faceTint: RGB = masked ? [0.35, 0.35, 0.36] : skin;
-    this.put('head', head[0], head[1], head[2], 0.205, 0.255, 0.235, faceTint, masked ? MAT.fabric : MAT.skin, 0, 0, p.yaw, hp);
-    const onHead = (lx: number, ly: number, lz: number): V3 => at(headL[0] + lx / bulk, headL[1] + ly * Math.cos(hp) + lz * Math.sin(hp), headL[2] + lz * Math.cos(hp) - ly * Math.sin(hp));
-    for (const ex of [-0.104, 0.104]) this.put('ball', ...onHead(ex, 0.01, -0.005), 0.025, 0.06, 0.045, faceTint, masked ? MAT.fabric : MAT.skin, 0, 0, p.yaw, hp); // ears
-    if (!masked) {
-      for (const ex of [-0.04, 0.04]) out.box(...onHead(ex, 0.025, 0.098), 0.028, 0.014, 0.012, [0.08, 0.06, 0.05], MAT.skin, 0, 0, p.yaw, hp); // eyes
-      for (const ex of [-0.042, 0.042]) out.box(...onHead(ex, 0.048, 0.1), 0.036, 0.008, 0.012, [0.12, 0.09, 0.07], MAT.fabric, 0, 0, p.yaw, hp, ex * 2); // eyebrows
+    // Head, then everything fitted to it (see gfx/headgear.ts): each piece is drawn with exactly
+    // the head's transform, so it sits on the skull.
+    const wear = (kind: string, c: ArrayLike<number>, layer = -1, metallic = 0, rough = 1, emissive = 0) => this.put(kind, head[0], head[1], head[2], 0.205, 0.255, 0.235, c, layer, emissive, 0, p.yaw, hp, 0, metallic, rough);
+    const face = look.face, ew = look.eyewear, hg = look.headgear;
+    this.put('head', head[0], head[1], head[2], 0.205, 0.255, 0.235, skin, MAT.skin, 0, 0, p.yaw, hp);
+    // Eyes, lids and lips; brows and hair unless a balaclava covers them.
+    wear('ftEyes', [0.85, 0.83, 0.8], -1, 0, 0.25);
+    wear('ftIris', [0.05, 0.035, 0.02], -1, 0, 0.1);
+    wear('ftLids', skin, MAT.skin);
+    const hairCol: RGB = [0.045, 0.032, 0.022];
+    if (face !== 3) {
+      wear('ftLips', [skin[0] * 0.95, skin[1] * 0.62, skin[2] * 0.6], MAT.skin);
+      wear('ftBrows', hairCol, -1, 0, 0.8);
+      if (hg !== 3) wear('hgHair', hairCol, -1, 0, 0.75);
     }
-    const hairTint: RGB = [0.16, 0.12, 0.09];
-    if (look.face === 1 || look.face === 2) out.box(...onHead(0, -0.075, 0.05), look.face === 2 ? 0.17 : 0.165, look.face === 2 ? 0.13 : 0.09, 0.15, look.face === 2 ? hairTint : [skin[0] * 0.6, skin[1] * 0.6, skin[2] * 0.6], look.face === 2 ? MAT.fabric : MAT.skin, 0, 0, p.yaw, hp);
-    if (look.face === 6) out.box(...onHead(0, -0.05, 0.1), 0.09, 0.02, 0.03, hairTint, MAT.fabric, 0, 0, p.yaw, hp);
-    if (look.face === 4) for (const ex of [-0.05, 0.05]) out.box(...onHead(ex, -0.01, 0.092), 0.06, 0.035, 0.03, [0.1, 0.14, 0.08], MAT.skin, 0, 0, p.yaw, hp + 0.3); // face paint
-    if (look.face === 5) out.box(...onHead(0, -0.06, 0.06), 0.185, 0.11, 0.16, [0.25, 0.27, 0.22], MAT.fabric, 0, 0, p.yaw, hp); // half mask
-    // Eyewear.
-    if (look.eyewear === 1) { out.box(...onHead(0, 0.03, 0.1), 0.17, 0.055, 0.05, [0.15, 0.15, 0.15], MAT.polymer, 0, 0, p.yaw, hp); out.box(...onHead(0, 0.03, 0.118), 0.14, 0.04, 0.02, [0.3, 0.2, 0.1], -1, 0, 0, p.yaw, hp, 0, 0.4, 0.1); }
-    if (look.eyewear === 2) out.box(...onHead(0, 0.028, 0.108), 0.16, 0.035, 0.025, [0.03, 0.03, 0.03], -1, 0, 0, p.yaw, hp, 0, 0.3, 0.08);
-    if (look.eyewear === 4) out.box(...onHead(0, 0.028, 0.108), 0.15, 0.035, 0.012, [0.6, 0.7, 0.8], -1, 0, 0, p.yaw, hp, 0, 0.2, 0.05);
-    // Headgear.
-    const hg = look.headgear;
-    if (hg === 0 || hg === 5) {
-      const high = hg === 5;
-      this.put('helmet', ...onHead(0, high ? 0.075 : 0.055, -0.005), 0.265, high ? 0.22 : 0.27, 0.285, helm, MAT.painted, 0, 0, p.yaw, hp);
-      this.put('gear', ...onHead(0, 0.1, 0.13), 0.06, 0.05, 0.02, [0.15, 0.15, 0.15], MAT.polymer, 0, 0, p.yaw, hp); // mount
-      for (const ex of [-0.127, 0.127]) this.put('gear', ...onHead(ex, 0.07, 0), 0.012, 0.03, 0.14, [0.15, 0.15, 0.15], MAT.polymer, 0, 0, p.yaw, hp); // rails
-      out.box(...onHead(0, -0.1, 0.03), 0.17, 0.02, 0.1, [0.2, 0.2, 0.2], MAT.fabric, 0, 0, p.yaw, hp); // chin strap
-      if (high) { for (const ex of [-0.115, 0.115]) out.box(...onHead(ex, 0, 0), 0.05, 0.1, 0.09, [0.2, 0.22, 0.2], MAT.polymer, 0, 0, p.yaw, hp); out.limb(onHead(-0.115, -0.02, 0.03), onHead(-0.05, -0.06, 0.11), 0.008, [0.1, 0.1, 0.1], MAT.polymer); }
-    } else if (hg === 1) {
-      this.put('helmet', ...onHead(0, 0.06, 0), 0.22, 0.19, 0.24, fatigues, MAT.fabric, 0, 0, p.yaw, hp);
-      this.put('gear', ...onHead(0, 0.075, 0.15), 0.17, 0.014, 0.1, fatigues, MAT.fabric, 0, 0, p.yaw, hp - 0.15);
-    } else if (hg === 2) {
-      this.put('helmet', ...onHead(0, 0.065, -0.005), 0.22, 0.24, 0.24, web, MAT.fabric, 0, 0, p.yaw, hp);
-    } else if (hg === 3) {
-      this.put('helmet', ...onHead(0, 0.0, -0.03), 0.28, 0.36, 0.29, fatigues, MAT.fabric, 0, 0, p.yaw, hp);
-    } else if (hg === 4) {
-      this.put('helmet', ...onHead(0, 0.065, -0.012), 0.212, 0.19, 0.24, hairTint, MAT.fabric, 0, 0, p.yaw, hp); // short hair
-    } else if (hg === 6) {
-      this.put('helmet', ...onHead(0, 0.07, 0), 0.22, 0.2, 0.235, fatigues, MAT.fabric, 0, 0, p.yaw, hp);
-      out.box(...onHead(0, 0.075, 0), 0.4, 0.016, 0.42, fatigues, MAT.fabric, 0, 0, p.yaw, hp); // brim
-    } else if (hg === 7) {
-      this.put('helmet', ...onHead(0, 0.06, -0.005), 0.215, 0.19, 0.235, [0.45, 0.1, 0.08], MAT.fabric, 0, 0, p.yaw, hp);
-      out.limb(onHead(0, 0.07, -0.11), onHead(0.03, 0.0, -0.19), 0.02, [0.45, 0.1, 0.08], MAT.fabric);
-    } else if (hg === 8) {
-      this.put('helmet', ...onHead(0.02, 0.1, 0), 0.25, 0.1, 0.25, [0.35, 0.1, 0.1], MAT.fabric, 0, 0, p.yaw, hp, 0.15);
-    }
-    if (look.eyewear === 3 && (hg === 0 || hg === 5)) {
-      // Night-vision tubes flipped up on the helmet mount.
-      for (const ex of [-0.035, 0.035]) out.limb(onHead(ex, 0.13, 0.13), onHead(ex, 0.2, 0.2), 0.022, [0.12, 0.12, 0.12], MAT.polymer);
-    }
+    if (face === 1) wear('fcStubble', [0.05, 0.04, 0.032], -1, 0, 0.9);
+    if (face === 2) wear('fcBeard', hairCol, -1, 0, 0.75);
+    if (face === 6) wear('fcMoustache', hairCol, -1, 0, 0.75);
+    if (face === 3) wear('fcBalaclava', [0.45, 0.45, 0.47], MAT.fabric);
+    if (face === 4) { wear('fcPaintA', [0.1, 0.14, 0.06], -1, 0, 0.8); wear('fcPaintB', [0.03, 0.03, 0.025], -1, 0, 0.8); }
+    if (face === 5) { wear('fcMask', [0.06, 0.06, 0.065], -1, 0, 0.55); wear('fcFilters', [1.0, 1.05, 0.8], MAT.polymer); }
+    if (ew === 1) { wear('ewGoggleFrame', [0.05, 0.05, 0.05], -1, 0, 0.7); wear('ewGoggleLens', [0.4, 0.25, 0.08], -1, 0.7, 0.06); }
+    if (ew === 2) { wear('ewShadeFrame', [0.03, 0.03, 0.03], -1, 0.3, 0.35); wear('ewShadeLens', [0.03, 0.03, 0.035], -1, 0.9, 0.04); }
+    if (ew === 4) wear('ewGlassFrame', [0.18, 0.18, 0.19], -1, 0.9, 0.3); // clear lenses: the eyes show through
+    if (hg === 0) { wear('hgHelmet', helm, MAT.painted); wear('hgHelmetTrim', [0.06, 0.06, 0.065], MAT.polymer); }
+    if (hg === 5) { wear('hgHigh', helm, MAT.painted); wear('hgHighTrim', [0.06, 0.06, 0.065], MAT.polymer); wear('hgHeadset', [0.09, 0.1, 0.09], MAT.polymer); }
+    if (hg === 1) wear('hgCap', fatigues, MAT.fabric);
+    if (hg === 2) wear('hgBeanie', web, MAT.fabric);
+    if (hg === 3) wear('hgHood', fatigues, MAT.fabric);
+    if (hg === 6) { wear('hgBoonie', fatigues, MAT.fabric); wear('hgBoonieBand', [fatigues[0] * 0.55, fatigues[1] * 0.55, fatigues[2] * 0.55], MAT.fabric); }
+    if (hg === 7) wear('hgBandana', [1.9, 0.4, 0.35], MAT.fabric);
+    if (hg === 8) { wear('hgBeret', [1.3, 0.35, 0.4], MAT.fabric); wear('hgBadge', [0.95, 0.75, 0.35], -1, 1, 0.3); }
+    // Night vision needs a helmet mount; otherwise it rides on a head strap.
+    if (ew === 3) { wear('ewNvg', [0.06, 0.065, 0.06], MAT.polymer); wear('ewNvgGlass', [0.1, 0.3, 0.18], -1, 0.6, 0.05, 0.4); }
     // Weapon: held at the shoulder, following the aim; it dips for a reload and drops for a swap.
     const lower = a.swap * 0.9 + a.reload * 0.35;
     const gunAt = at(0.13, chestL[1] - 0.04 - lower * 0.16, chestL[2] + 0.3 - a.swap * 0.06);
@@ -1315,6 +1300,7 @@ export class Scene {
       }
     }
 
+    if (settings.fill) lights.push({ pos: settings.fill, radius: 7, color: [1, 0.95, 0.88], intensity: 9 });
     // Nearest lights win the 16 slots. Some lamps flicker.
     for (const l of this.staticLights) {
       if (l.flicker === undefined) { lights.push(l); continue; }

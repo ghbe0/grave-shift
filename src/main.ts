@@ -103,6 +103,9 @@ class App {
   /** The customize screen's 3D preview is running (a private, never-stepped session). */
   private showroom = false;
   private showYaw = 0.4;
+  private showZoom = 0;
+  /** `?portrait=headgear=2,face=1`: the showroom close on the face, captured for option pictures. */
+  portrait = false;
   private showDir: number | null = null;
   private materialStream: MaterialStream | null = null;
   private rendererName = '';
@@ -142,7 +145,16 @@ class App {
 
     const code = codeFromUrl();
     this.show('main');
-    if (params.has('shot')) this.openShot(+params.get('shot')! || 0);
+    if (params.has('portrait')) {
+      const set: Record<string, number> = {};
+      for (const kv of (params.get('portrait') ?? '').split(',')) { const [k, v] = kv.split('='); if (k) set[k] = +v; }
+      this.look = { ...this.look, ...set };
+      this.portrait = true;
+      this.czTab = 'Head';
+      this.showZoom = 1;
+      this.openShowroom();
+      $('menu').classList.add('clear');
+    } else if (params.has('shot')) this.openShot(+params.get('shot')! || 0);
     else this.startPanorama();
     if (code) {
       $<HTMLInputElement>('join-code').value = code;
@@ -232,12 +244,14 @@ class App {
       build: ['L', 'A', 'H'], sleeves: ['⟂', '↟', '✕'], pads: ['—', '◖', '◖◗'], pack: ['—', '🎒', '📻', '💧', '⛺'],
     };
     const g = (key: string, names: string[]) => names.map((name, k) => ({ name, art: word(glyphs[key]?.[k] ?? name.slice(0, 2)) }));
+    // Head options show a rendered close-up of the operator wearing them (tools/shoot-looks.mjs).
+    const photo = (key: string, names: string[]) => names.map((name, k) => ({ name, art: `<img class="sw photo" src="assets/look/${key}-${k}.jpg" alt="" draggable="false" onerror="this.replaceWith(Object.assign(document.createElement('i'),{className:'sw word',textContent:'${glyphs[key]?.[k] ?? ''}'}))">` }));
     return [
       { tab: 'Head', sections: [
-        { key: 'headgear', title: 'Headgear', options: g('headgear', HEADGEAR) },
+        { key: 'headgear', title: 'Headgear', options: photo('headgear', HEADGEAR) },
         { key: 'helmet', title: 'Helmet colour', options: HELMETS.map(h => ({ name: h.name, art: sw(h.rgb) })) },
-        { key: 'face', title: 'Face', options: g('face', FACES) },
-        { key: 'eyewear', title: 'Eyewear', options: g('eyewear', EYEWEAR) },
+        { key: 'face', title: 'Face', options: photo('face', FACES) },
+        { key: 'eyewear', title: 'Eyewear', options: photo('eyewear', EYEWEAR) },
       ] },
       { tab: 'Body', sections: [
         { key: 'skin', title: 'Skin tone', options: SKINS.map(x => ({ name: x.name, art: sw(x.rgb.map(v => v * 0.75)) })) },
@@ -524,6 +538,19 @@ class App {
       if (el.type === 'checkbox') el.checked = s[key] as boolean; else el.value = String(s[key]);
       el.oninput = () => { (s as unknown as Record<string, unknown>)[key] = el.type === 'checkbox' ? el.checked : +el.value; apply(); saveSettings(s); };
     };
+    // Settings tabs.
+    const tabs = document.querySelectorAll<HTMLButtonElement>('#set-tabs button');
+    tabs.forEach(b => (b.onclick = () => {
+      tabs.forEach(t => t.classList.toggle('on', t === b));
+      document.querySelectorAll<HTMLElement>('.set-page').forEach(pg => (pg.hidden = pg.dataset.page !== b.dataset.tab));
+    }));
+    // Sliders show their value.
+    const shown: [string, keyof Settings, (v: number) => string][] = [
+      ['fov', 'fov', v => `${v}°`], ['volume', 'volume', v => `${Math.round(v * 100)}%`], ['sens', 'sens', v => v.toFixed(2)], ['touchsens', 'touchSens', v => v.toFixed(2)],
+    ];
+    const showValues = () => { for (const [id, key, f] of shown) $(`${id}-value`).textContent = f(s[key] as number); };
+    showValues();
+    for (const [id] of shown) $(`set-${id}`).addEventListener('input', showValues);
     bind('set-sens', 'sens', () => (this.input.sensitivity = s.sens));
     bind('set-fov', 'fov', () => {});
     bind('set-volume', 'volume', () => (this.sfx.volume = s.volume));
@@ -865,6 +892,7 @@ class App {
       const t = new TouchControls(document.body);
       t.onPause = () => this.input.unlock();
       t.onScores = down => (this.input.scoreboard = down);
+      t.onMenu = () => { this.input.unlock(); this.openSettings('pause'); };
       this.input.touch = t;
     } else if (!on && this.input.touch) {
       this.input.touch.root.remove();
@@ -872,6 +900,16 @@ class App {
     }
     if (this.input.touch) this.input.touch.sensitivity = this.settings.touchSens;
     document.body.classList.toggle('touch', on);
+  }
+
+  /** A short vibration on phones (fire, hits, being hurt); nothing elsewhere. */
+  private lastBuzz = 0;
+  private buzz(ms: number): void {
+    if (!this.input.touch || !this.input.touchEngaged) return;
+    const now = performance.now();
+    if (now - this.lastBuzz < 45) return;
+    this.lastBuzz = now;
+    try { navigator.vibrate?.(ms); } catch { /* not allowed */ }
   }
 
   private sound(e: Float32Array): void {
@@ -893,7 +931,7 @@ class App {
     switch (e[0]) {
       case V.local:
         switch (e[1]) {
-          case 1: fire(e[2], false); break;
+          case 1: fire(e[2], false); this.buzz(6); break;
           case 2: this.sfx.dry(); break;
           case 3: this.sfx.reload(cat.weapons[e[2]]?.reload ?? 2); break;
           case 4: this.sfx.swing(); break;
@@ -908,13 +946,13 @@ class App {
         }
         break;
       case V.shot: if (e[1] !== s.selfId) fire(e[2], true); break;
-      case V.hit: if (e[1] === s.selfId) this.sfx.hit(e[4] > 0); break;
+      case V.hit: if (e[1] === s.selfId) { this.sfx.hit(e[4] > 0); this.buzz(e[4] > 0 ? 25 : 12); } break;
       case V.explode: if (e[5] !== 2) this.sfx.explode(); break;
       case V.buy: if (e[1] === s.selfId) this.sfx.buy(); break;
       case V.msg: if (e[2] === s.selfId && e[1] < 4) this.sfx.deny(); break;
       case V.round: this.sfx.round(); break;
       case V.powerup: if (e[5]) this.sfx.powerup(); break;
-      case V.zattack: if (e[2] === s.selfId) { this.sfx.hurt(); this.sfx.maul(); } break;
+      case V.zattack: if (e[2] === s.selfId) { this.sfx.hurt(); this.sfx.maul(); this.buzz(60); } break;
       case V.spawn: if (Math.random() < 0.3) this.sfx.groan(); break;
       case V.zdeath: if (Math.random() < 0.6) this.sfx.corpse(); break;
       case V.melee: if (e[1] !== s.selfId) this.sfx.swing(); break;
@@ -1027,11 +1065,19 @@ class App {
         }
         this.showDir = best;
       }
-      const a = this.showDir, dist = 2.3;
-      view = { pos: [f[0] + Math.sin(a) * dist, f[1] + 1.2, f[2] + Math.cos(a) * dist], yaw: 0, pitch: -0.08, roll: 0, fov: 45 };
-      view.yaw = Math.atan2(-(f[0] - view.pos[0]), -(f[2] - view.pos[2])) + 0.28;
-      const frame = this.scene.build(view, dt, this.canvas.width / this.canvas.height, { fov: 50, motionBlur: false, dof: true, third: 1, bodyYaw: (this.showDir ?? 0) + this.showYaw + Math.sin(now / 1800) * 0.06 + Math.PI });
+      // The Head tab moves in close on the face; the others show the whole operator. The camera
+      // eases between the two.
+      const close = this.czTab === 'Head' ? 1 : 0;
+      this.showZoom += (close - this.showZoom) * Math.min(1, dt * 5);
+      const z = this.showZoom, aspect = this.canvas.width / this.canvas.height;
+      const a = this.showDir, dist = 3.1 + (aspect > 2 ? 0.3 : 0) - z * 2.2;
+      const camY = f[1] + 1.02 + z * 0.72, fov = 46 - z * 16;
+      view = { pos: [f[0] + Math.sin(a) * dist, camY, f[2] + Math.cos(a) * dist], yaw: 0, pitch: -0.02 - z * 0.04, roll: 0, fov };
+      view.yaw = Math.atan2(-(f[0] - view.pos[0]), -(f[2] - view.pos[2])) + (0.3 - z * 0.12) * (aspect > 1 ? 1 : 0);
+      const turn = this.portrait ? 0.55 : this.showYaw + Math.sin(now / 1800) * 0.06;
+      const frame = this.scene.build(view, dt, aspect, { fov, motionBlur: false, dof: !this.portrait, third: 1, fill: [view.pos[0] + Math.cos(view.yaw) * 0.8, view.pos[1] + 0.7, view.pos[2] - Math.sin(view.yaw) * 0.8], bodyYaw: (this.showDir ?? 0) + turn + Math.PI });
       this.renderer.render(frame);
+      if (this.portrait && ++this.shotFrames === 40) this.shotUrl = this.canvas.toDataURL('image/jpeg', 0.86);
       return;
     }
     // Third person while the key is held: the camera eases out over the right shoulder (stopping

@@ -142,35 +142,46 @@
       <p class="hint">Drag the operator to turn them.</p>
     </section>
 
-    <section id="screen-settings" class="screen" hidden>
-      <h2>Settings</h2>
-      <h3>Profile</h3>
-      <label>Player name <input id="set-name" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Letters, numbers, spaces"></label>
-      <h4>Frame rate</h4><select id="set-fps"></select>
-      <p id="display-hz" class="hint"></p>
-      <h4>Texture quality</h4><select id="set-tex"></select>
-      <p id="tex-status" class="hint"></p>
-      <label>Field of view <input id="set-fov" type="range" min="70" max="110" step="1"></label>
-      <label><input id="set-blur" type="checkbox"> Motion blur</label>
-      <label><input id="set-dof" type="checkbox"> Depth of field</label>
-      <label><input id="set-showfps" type="checkbox"> Show FPS counter</label>
-      <label><input id="set-dynres" type="checkbox"> Dynamic resolution (keeps the frame rate up)</label>
-      <label>Resolution scale <span id="scale-value" class="hint"></span><input id="set-scale" type="range" min="0.5" max="1" step="0.05"></label>
-      <h3>Controls</h3>
-      <label>Mouse sensitivity <input id="set-sens" type="range" min="0.2" max="3" step="0.05"></label>
-      <h4>On-screen touch controls</h4><select id="set-touch"><option value="auto">Auto (phones, tablets)</option><option value="on">On</option><option value="off">Off</option></select>
-      <label>Touch look sensitivity <input id="set-touchsens" type="range" min="0.3" max="3" step="0.05"></label>
-      <h3>Minimap</h3>
-      <h4>Minimap</h4><select id="set-mapsize"><option value="0">Off</option><option value="150">Small</option><option value="190">Medium</option><option value="250">Large</option></select>
-      <h4>Minimap turns</h4><select id="set-maprotate"><option value="1">With your view</option><option value="0">Never (north is up)</option></select>
-      <h4>Minimap range</h4><select id="set-maprange"><option value="16">Close (16 m)</option><option value="24">Normal (24 m)</option><option value="36">Wide (36 m)</option><option value="55">Very wide (55 m)</option></select>
-      <h3>Key bindings</h3>
-      <p class="hint">Click a binding, then press the key or mouse button you want. Esc cancels. The mouse wheel always switches weapon.</p>
-      <div id="binds"></div>
-      <div class="row"><button id="btn-binds-reset">Reset key bindings</button></div>
-      <h3>Audio</h3>
-      <label>Volume <input id="set-volume" type="range" min="0" max="1" step="0.05"></label>
-      <div class="row"><button id="btn-settings-done" class="primary">Done</button></div>
+    <section id="screen-settings" class="screen wide settings" hidden>
+      <div class="screen-head"><h2>Settings</h2><button id="btn-settings-done" class="primary">Done</button></div>
+      <nav id="set-tabs" class="tabs">
+        <button data-tab="video" class="on">Video</button><button data-tab="audio">Audio</button><button data-tab="controls">Controls</button><button data-tab="hud">Minimap</button><button data-tab="keys">Keys</button><button data-tab="profile">Profile</button>
+      </nav>
+      <div class="set-page" data-page="video">
+        <label class="slider">Field of view <b id="fov-value"></b><input id="set-fov" type="range" min="70" max="110" step="1"></label>
+        <label class="slider">Resolution scale <b id="scale-value"></b><input id="set-scale" type="range" min="0.5" max="1" step="0.05"></label>
+        <div class="toggles">
+          <label class="check"><input id="set-dynres" type="checkbox"> Dynamic resolution</label>
+          <label class="check"><input id="set-blur" type="checkbox"> Motion blur</label>
+          <label class="check"><input id="set-dof" type="checkbox"> Depth of field</label>
+          <label class="check"><input id="set-showfps" type="checkbox"> FPS counter</label>
+        </div>
+        <h4>Frame rate</h4><select id="set-fps"></select>
+        <p id="display-hz" class="hint"></p>
+        <h4>Texture quality</h4><select id="set-tex"></select>
+        <p id="tex-status" class="hint"></p>
+      </div>
+      <div class="set-page" data-page="audio" hidden>
+        <label class="slider">Volume <b id="volume-value"></b><input id="set-volume" type="range" min="0" max="1" step="0.05"></label>
+      </div>
+      <div class="set-page" data-page="controls" hidden>
+        <label class="slider">Mouse sensitivity <b id="sens-value"></b><input id="set-sens" type="range" min="0.2" max="3" step="0.05"></label>
+        <label class="slider">Touch look sensitivity <b id="touchsens-value"></b><input id="set-touchsens" type="range" min="0.3" max="3" step="0.05"></label>
+        <h4>On-screen touch controls</h4><select id="set-touch"><option value="auto">Auto (phones, tablets)</option><option value="on">On</option><option value="off">Off</option></select>
+      </div>
+      <div class="set-page" data-page="hud" hidden>
+        <h4>Minimap</h4><select id="set-mapsize"><option value="0">Off</option><option value="150">Small</option><option value="190">Medium</option><option value="250">Large</option></select>
+        <h4>Minimap turns</h4><select id="set-maprotate"><option value="1">With your view</option><option value="0">Never (north is up)</option></select>
+        <h4>Minimap range</h4><select id="set-maprange"><option value="16">Close (16 m)</option><option value="24">Normal (24 m)</option><option value="36">Wide (36 m)</option><option value="55">Very wide (55 m)</option></select>
+      </div>
+      <div class="set-page" data-page="keys" hidden>
+        <p class="hint">Click a binding, then press the key or mouse button you want. Esc cancels. The mouse wheel always switches weapon.</p>
+        <div id="binds"></div>
+        <div class="row"><button id="btn-binds-reset">Reset key bindings</button></div>
+      </div>
+      <div class="set-page" data-page="profile" hidden>
+        <label>Player name <input id="set-name" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Letters, numbers, spaces"></label>
+      </div>
     </section>
 
     <section id="screen-pause" class="screen" hidden>

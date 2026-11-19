@@ -6,6 +6,7 @@
 // instead of being a box or a sphere. All are unit-sized: they span y -0.5..0.5 and about
 // -0.5..0.5 across, so the scene can stretch them between two joints.
 import type { MeshData } from './renderer';
+import { headgearParts } from './headgear';
 
 /**
  * One cross-section of a loft. `rx`, `rz`: half-width and half-depth (0.5 fills the unit box);
@@ -31,7 +32,7 @@ function normals(pos: number[], idx: number[]): number[] {
   return n;
 }
 
-function pack(pos: number[], idx: number[], uv: number[]): MeshData {
+export function pack(pos: number[], idx: number[], uv: number[]): MeshData {
   const nrm = normals(pos, idx);
   const count = pos.length / 3;
   const v = new Float32Array(count * 8);
@@ -129,7 +130,12 @@ const bump = (x: number, y: number, z: number, cx: number, cy: number, cz: numbe
 
 /** A human head: cranium, brow ridge, eye sockets, nose, cheekbones, jaw, chin and ears. */
 export function headMesh(gaunt = 0): MeshData {
-  return sculpt((x, y, z) => {
+  return sculpt(headShape(gaunt));
+}
+
+/** The head's radius multiplier for a unit direction (x right, y up, -z the face). */
+export function headShape(gaunt = 0): (x: number, y: number, z: number) => number {
+  return (x, y, z) => {
     let r = 1;
     // Longer front to back than side to side; the cranium swells at the back.
     r *= 1 - 0.1 * x * x + 0.06 * Math.max(0, z) * Math.max(0, y + 0.2);
@@ -145,7 +151,7 @@ export function headMesh(gaunt = 0): MeshData {
     r += 0.03 * bump(x, y, z, 0, -0.5, -0.9, 0.2); // lips
     r += 0.16 * (bump(x, y, z, -1, 0.02, 0.05, 0.18) + bump(x, y, z, 1, 0.02, 0.05, 0.18)); // ears
     return r;
-  });
+  };
 }
 
 /** Rounded-edged block for gear: plates, pouches, packs, boxes on a belt. */
@@ -239,5 +245,6 @@ export function bodyParts(): Record<string, MeshData> {
     gear: gearMesh(),
     // Helmet shell: a dome cut off above the ears, with a slight flare at the rim.
     helmet: sculpt((x, y, z) => (y < -0.25 ? 0.62 + 0.35 * (y + 1) : 1 + 0.04 * Math.max(0, z) - 0.04 * x * x)),
+    ...headgearParts(),
   };
 }
