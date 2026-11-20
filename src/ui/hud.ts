@@ -1,4 +1,5 @@
 // In-match HUD drawn with DOM elements over the canvas.
+import { t } from './i18n';
 import { fireMode, WEAPON_CLASSES, type Sim, type Snap } from '../core/sim';
 import { cardHtml, COLORS, DEFAULT_LOOK, reticleSvg, type Look } from '../game/look';
 import type { Session } from '../game/session';
@@ -29,8 +30,13 @@ export class Hud {
 
   constructor(private sim: Sim) {
     this.minimap = new Minimap(sim, $('minimap') as HTMLCanvasElement, $('bigmap-canvas') as HTMLCanvasElement, $('minimap-label'));
+    this.relabel();
+  }
+
+  /** (Re)builds text that is laid out once, in the current language. */
+  relabel(): void {
     // Compass tape: three turns of headings every 15 degrees, so it can scroll without a seam.
-    const names: Record<number, string> = { 0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: 'W', 315: 'NW' };
+    const names: Record<number, string> = Object.fromEntries(Object.entries({ 0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: 'W', 315: 'NW' }).map(([k, v]) => { const h = t(`compass.${v}`); return [k, h.startsWith('compass.') ? v : h]; }));
     const cell = (d: number) => `<span class="${d % 90 === 0 ? 'major' : ''}">${names[d] ?? (d % 45 === 0 ? '' : d)}</span>`;
     $('compass-tape').innerHTML = Array.from({ length: 72 }, (_, i) => cell((i * 15) % 360)).join('');
   }
@@ -274,10 +280,10 @@ export class Hud {
     const tn = cat.tonics[p[P.tonic]];
     if (tn) {
       const left = tn.kind === 0 ? `${Math.ceil(p[P.tonic_left])}s` : tn.kind === 1 ? `${p[P.tonic_left]} rounds` : tn.kind === 3 ? `[Z] ×${p[P.tonic_left]}` : '';
-      perks.push(`<span class="chip tonic">${tn.name} ${left}</span>`);
+      perks.push(`<span class="chip tonic">${tn.name} <i>${left}</i></span>`);
     }
-    if (hdr[H.insta_t] > 0) perks.push(`<span class="chip hot">One-Shot ${Math.ceil(hdr[H.insta_t])}s</span>`);
-    if (hdr[H.double_t] > 0) perks.push(`<span class="chip hot">Double Pay ${Math.ceil(hdr[H.double_t])}s</span>`);
+    if (hdr[H.insta_t] > 0) perks.push(`<span class="chip hot">One-Shot <i>${Math.ceil(hdr[H.insta_t])}s</i></span>`);
+    if (hdr[H.double_t] > 0) perks.push(`<span class="chip hot">Double Pay <i>${Math.ceil(hdr[H.double_t])}s</i></span>`);
     const streaks = [0, 1, 2].filter(n => p[P.streak_ready] & (1 << n)).map(n => `<span class="chip hot">[${n + 4}] ${cat.streaks[s.start.players.find(q => q.id === s.selfId)?.loadout[18 + n] ?? n]?.name ?? 'Streak'}</span>`);
     setHtml('perks', perks.concat(streaks).join(''));
 

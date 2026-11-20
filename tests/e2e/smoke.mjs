@@ -191,6 +191,28 @@ await check('settings: texture quality, frame rate cap and FPS counter', async (
   return { displayHz: hz, fpsOptions: fpsOptions.map(o => o.value), materialSize: size, fps: +fps.toFixed(1), counter, firstSample: +before.toFixed(1) };
 });
 
+await check('language: Hebrew switch translates the menus, turns the page right-to-left and is remembered', async () => {
+  const page = await openPage('?renderer=webgl2&low', 'hebrew');
+  await page.click('#btn-settings');
+  await page.click('#set-lang');
+  await page.click('#btn-settings-done');
+  const solo = await page.evaluate(() => document.getElementById('btn-solo').innerText);
+  const dir = await page.evaluate(() => document.documentElement.dir);
+  if (!solo.includes('סולו') || dir !== 'rtl') throw new Error(`after switching: "${solo}", dir ${dir}`);
+  // Anything still in English on the main menu (party codes and key names are left alone).
+  const english = await page.evaluate(() => [...document.querySelectorAll('#screen-main *')].filter(e => !e.children.length && /[a-z]{3,}/.test(e.textContent) && !e.closest('[translate="no"]') && e.id !== 'renderer-info').map(e => e.textContent));
+  if (english.length) throw new Error(`untranslated: ${english.join(' | ')}`);
+  await page.reload();
+  await page.waitForSelector('#screen-main:not([hidden])', { timeout: 90000 });
+  if (await page.evaluate(() => document.documentElement.dir) !== 'rtl') throw new Error('language not remembered after reload');
+  await page.click('#btn-settings');
+  await page.click('#set-lang');
+  if (!(await page.evaluate(() => document.getElementById('btn-solo').innerText)).includes('Solo')) throw new Error('switching back did not restore English');
+  assertClean(page);
+  await page.context().close();
+  return { solo: solo.split('\n')[0] };
+});
+
 await check('phone: touch joystick, look, fire, pause', async () => {
   // A phone in landscape with real touch input (Chrome DevTools touch events, so pointer events
   // arrive exactly as from a finger). Waits are on conditions, not times: software rendering can

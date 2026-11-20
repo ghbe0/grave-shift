@@ -14,6 +14,7 @@
 //   action         grenades and rockets in flight, explosion rings, where shots were fired, deaths
 // plus a north marker and cardinal ticks on the rim, range rings, the name of the area you are in,
 // and a border that flashes when you are hit.
+import { lang } from './i18n';
 import type { Sim, Snap } from '../core/sim';
 import { MODES, TEAM_CSS } from '../game/rules';
 import type { Session } from '../game/session';
@@ -210,7 +211,9 @@ export class Minimap {
         const dim = (kind === I.perk || kind === I.bench || kind === I.console) && !powered;
         g.globalAlpha = dim ? 0.45 : 1;
         dot(x, z, kind === I.crate ? 5 + pulse : 4.5, '#10141a', st[1]);
-        this.text(g, st[0], x * k, z * k, st[1], 8, upright);
+        // Hebrew letters: נ weapon (נשק), ה perk (הטבה), ש tonic (שיקוי), ד upgrade (שדרוג), ע workbench (עמדה), ב console (בקרה).
+        const he: Record<string, string> = { W: 'נ', P: 'ה', U: 'ד', T: 'ש', B: 'ע', C: 'ב' };
+        this.text(g, lang() === 'he' ? he[st[0]] ?? st[0] : st[0], x * k, z * k, st[1], 8, upright);
         g.globalAlpha = 1;
       }
     }
@@ -362,7 +365,7 @@ export class Minimap {
         g.fillRect(-1, -half + 2 * dpr, 2, (i % 2 ? 4 : 7) * dpr);
         g.restore();
       }
-      this.text(g, 'N', 0, -half + 15 * dpr, '#6fb6ff', 11 * dpr, -turn);
+      this.text(g, lang() === 'he' ? 'צ' : 'N', 0, -half + 15 * dpr, '#6fb6ff', 11 * dpr, -turn);
       // Teammates outside the window: a marker on the rim pointing their way.
       const info = MODES[s.start.mode];
       const mine = me[P.team];

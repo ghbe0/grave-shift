@@ -80,7 +80,7 @@
     <section id="screen-lobby" class="screen wide" hidden>
       <h2>Party</h2>
       <div class="code-box">
-        <div><span class="hint">Party code</span><div id="lobby-code" class="code"></div></div>
+        <div><span class="hint">Party code</span><div id="lobby-code" class="code" translate="no"></div></div>
         <button id="btn-copy-code">Copy code</button>
       </div>
             <p class="hint">Players connect directly to each other, so people who join can see your public IP address (as any website you visit can). Nothing else on your computer or network is exposed. Share the code only with people you trust.</p>
@@ -143,7 +143,9 @@
     </section>
 
     <section id="screen-settings" class="screen wide settings" hidden>
-      <div class="screen-head"><h2>Settings</h2><button id="btn-settings-done" class="primary">Done</button></div>
+      <div class="screen-head"><h2>Settings</h2>
+        <div class="lang-row"><span class="lang-label">Language</span><button id="set-lang" class="lang-switch" type="button" role="switch" aria-checked="false" aria-label="Language" translate="no"><span>English</span><span>עברית</span><i></i></button></div>
+        <button id="btn-settings-done" class="primary">Done</button></div>
       <nav id="set-tabs" class="tabs">
         <button data-tab="video" class="on">Video</button><button data-tab="audio">Audio</button><button data-tab="controls">Controls</button><button data-tab="hud">Minimap</button><button data-tab="keys">Keys</button><button data-tab="profile">Profile</button>
       </nav>

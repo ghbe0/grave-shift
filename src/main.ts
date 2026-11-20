@@ -20,6 +20,7 @@ import { matOffset } from './gfx/renderer';
 import { escapeHtml, Hud } from './ui/hud';
 import { LoadoutEditor } from './ui/loadout';
 import { MODE_ICONS, PICKER_ART, tilePicker } from './ui/picker';
+import { setLang, type Lang } from './ui/i18n';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const params = new URLSearchParams(location.search);
@@ -41,8 +42,10 @@ interface Settings {
   touchSens: number;
   /** Lower the resolution on the fly when frames run long, and raise it again when they don't. */
   dynRes: boolean;
+  /** Interface language. */
+  lang: Lang;
 }
-const DEFAULTS: Settings = { sens: 1, fov: 90, volume: 0.5, blur: true, dof: true, textures: 'high', fpsLimit: 0, showFps: false, renderScale: 1, touch: 'auto', touchSens: 1, dynRes: true, mapSize: 190, mapRotate: 1, mapRange: 24 };
+const DEFAULTS: Settings = { sens: 1, fov: 90, volume: 0.5, blur: true, dof: true, textures: 'high', fpsLimit: 0, showFps: false, renderScale: 1, touch: 'auto', touchSens: 1, dynRes: true, lang: 'en', mapSize: 190, mapRotate: 1, mapRange: 24 };
 /** Phones start lighter: they have less GPU and memory than a desktop, and post effects cost the most. */
 const PHONE_DEFAULTS: Partial<Settings> = { textures: 'medium', blur: false, dof: false, renderScale: 0.75, fov: 80 };
 function loadSettings(): Settings {
@@ -51,6 +54,7 @@ function loadSettings(): Settings {
   try { saved = JSON.parse(localStorage.getItem('gs.settings') ?? 'null'); } catch { /* storage may be blocked */ }
   s = { ...DEFAULTS, ...(saved ? {} : isTouchDevice() ? PHONE_DEFAULTS : {}), ...(saved ?? {}) };
   if (!(s.textures in TEXTURE_QUALITY)) s.textures = DEFAULTS.textures;
+  if (s.lang !== 'he') s.lang = 'en';
   if (!isFpsLimit(s.fpsLimit)) s.fpsLimit = 0;
   if (!['auto', 'on', 'off'].includes(s.touch)) s.touch = 'auto';
   s.renderScale = Math.min(1, Math.max(0.5, Number(s.renderScale) || 1));
@@ -120,6 +124,8 @@ class App {
   private dynFast = 0;
 
   async init(): Promise<void> {
+    // The saved language first, so even the loading screen is in it.
+    setLang(this.settings.lang);
     this.sim = await loadSim();
     this.hud = new Hud(this.sim);
     this.hud.lookOf = id => this.lookOf(id);
@@ -538,6 +544,30 @@ class App {
       if (el.type === 'checkbox') el.checked = s[key] as boolean; else el.value = String(s[key]);
       el.oninput = () => { (s as unknown as Record<string, unknown>)[key] = el.type === 'checkbox' ? el.checked : +el.value; apply(); saveSettings(s); };
     };
+    // Language: a two-way switch you can click or drag; saved with the other settings.
+    const sw = $('set-lang');
+    const applyLang = (l: Lang) => {
+      s.lang = l;
+      saveSettings(s);
+      sw.setAttribute('aria-checked', String(l === 'he'));
+      sw.classList.toggle('he', l === 'he');
+      setLang(l);
+      this.hud.relabel();
+      this.renderCustomize();
+    };
+    let dragFrom: number | null = null, dragged = false;
+    sw.addEventListener('pointerdown', e => { dragFrom = e.clientX; dragged = false; sw.setPointerCapture(e.pointerId); });
+    sw.addEventListener('pointermove', e => {
+      if (dragFrom === null) return;
+      const dx = e.clientX - dragFrom, he = s.lang === 'he';
+      // English sits on the left of the switch, Hebrew on the right, whatever the page direction.
+      if (Math.abs(dx) > 14) { dragged = true; if ((dx > 0) !== he) applyLang(he ? 'en' : 'he'); dragFrom = e.clientX; }
+    });
+    sw.addEventListener('pointerup', () => { if (dragFrom !== null && !dragged) applyLang(s.lang === 'he' ? 'en' : 'he'); dragFrom = null; });
+    sw.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); applyLang(s.lang === 'he' ? 'en' : 'he'); } });
+    sw.setAttribute('aria-checked', String(s.lang === 'he'));
+    sw.classList.toggle('he', s.lang === 'he');
+
     // Settings tabs.
     const tabs = document.querySelectorAll<HTMLButtonElement>('#set-tabs button');
     tabs.forEach(b => (b.onclick = () => {
@@ -821,7 +851,7 @@ class App {
       const b = document.createElement('button');
       b.type = 'button';
       b.dataset.bind = a.id;
-      b.textContent = keyName(this.input.binds[a.id]);
+      b.replaceChildren(Object.assign(document.createElement('span'), { textContent: keyName(this.input.binds[a.id]), translate: false }));
       b.onclick = e => {
         e.preventDefault();
         b.textContent = 'Press a key...';

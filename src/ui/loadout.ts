@@ -57,7 +57,7 @@ export class LoadoutEditor {
       .flatMap(k => {
         const heavy = !primary && k !== 0 && k !== 7;
         return c.weapons.filter(w => w.cls === k).map(w => ({
-          id: w.id, name: w.name, kind: 'weapon', slug: w.slug, weapon: w, desc: `${fireMode(w)} · ${w.mag} rounds`,
+          id: w.id, name: w.name, kind: 'weapon', slug: w.slug, weapon: w, desc: `${fireMode(w)} · ${w.mag}-round mag`,
           group: WEAPON_CLASSES[k], note: heavy ? 'Needs Heavy Hitter' : undefined,
         }));
       });
